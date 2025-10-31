@@ -393,7 +393,6 @@ class WebRTCManagerPeer {
     }
   }
 
-
   // Buat peer connection untuk peer tertentu
   Future<void> _createPeerConnection(String peerId) async {
     if (_isDisposed || _localStream == null) return;
@@ -629,25 +628,44 @@ class WebRTCManagerPeer {
     }
   }
 
+
   Future<void> toggleCamera() async {
     if (_localStream == null || _isProcessing || _isDisposed) return;
 
     _isProcessing = true;
     try {
+      _isCameraOn = !_isCameraOn;
+
+      print('📷 Camera ${_isCameraOn ? 'enabling' : 'disabling'}');
+
+      // **SIMPLE SOLUTION: Enable/disable video tracks tanpa ganti stream**
       final videoTracks = _localStream!.getVideoTracks();
       final tracks = List<MediaStreamTrack>.from(videoTracks);
 
       if (tracks.isNotEmpty) {
-        _isCameraOn = !_isCameraOn;
-
-        if (_isCameraOn) {
-          await _enableCamera();
-        } else {
-          await _disableCamera(tracks);
+        for (final track in tracks) {
+          track.enabled = _isCameraOn;
+          print('   - Video track ${track.id} ${_isCameraOn ? 'enabled' : 'disabled'}');
         }
 
-        print('📷 Camera ${_isCameraOn ? 'enabled' : 'disabled'}');
+        // **PERBAIKAN: Juga enable/disable di peer connection senders**
+        for (final pc in _peerConnections.values) {
+          final senders = await pc.getSenders();
+          for (final sender in senders) {
+            if (sender.track?.kind == 'video' && sender.track != null) {
+              sender.track!.enabled = _isCameraOn;
+            }
+          }
+        }
+
+        // Update UI
+        _safeCallback(() => onLocalStream?.call(_localStream!));
+      } else if (_isCameraOn) {
+        // Jika tidak ada video tracks tapi mau enable camera, buat baru
+        await _enableCamera();
       }
+
+      print('✅ Camera ${_isCameraOn ? 'enabled' : 'disabled'}');
     } catch (e) {
       print('❌ Error toggling camera: $e');
       _isCameraOn = !_isCameraOn;
@@ -656,8 +674,46 @@ class WebRTCManagerPeer {
     }
   }
 
+  Future<void> _disableCamera() async {
+    try {
+      print('🎥 Disabling camera with black video...');
+
+      // **PERBAIKAN: Gunakan approach yang berbeda - disable tracks tanpa remove**
+      final videoTracks = _localStream!.getVideoTracks();
+      final tracks = List<MediaStreamTrack>.from(videoTracks);
+
+      for (final track in tracks) {
+        // **PERBAIKAN: Daripada stop dan remove, cukup disable track**
+        track.enabled = false;
+        print('   - Disabled video track: ${track.id}');
+      }
+
+      // **PERBAIKAN: Untuk peer connections, jangan replace dengan null**
+      // Biarkan track tetap ada tapi disabled, sehingga remote tidak stuck
+      for (final pc in _peerConnections.values) {
+        final senders = await pc.getSenders();
+        for (final sender in senders) {
+          if (sender.track?.kind == 'video' && sender.track != null) {
+            // **CRITICAL: Enable/disable track instead of replacing dengan null**
+            sender.track!.enabled = false;
+          }
+        }
+      }
+
+      // **PERBAIKAN: Update UI untuk menunjukkan camera mati**
+      _safeCallback(() => onLocalStream?.call(_localStream!));
+
+      print('✅ Camera disabled - video tracks disabled (not removed)');
+    } catch (e) {
+      print('❌ Error disabling camera: $e');
+      rethrow;
+    }
+  }
+
   Future<void> _enableCamera() async {
     try {
+      print('🎥 Enabling camera...');
+
       final videoConstraints = {
         'video': {
           'width': {'ideal': 640},
@@ -670,13 +726,13 @@ class WebRTCManagerPeer {
       final newStream = await navigator.mediaDevices.getUserMedia(videoConstraints);
       final newVideoTrack = newStream.getVideoTracks().first;
 
-      // Stop existing video tracks safely
+      // **PERBAIKAN: Stop existing video tracks yang disabled**
       await _disableCurrentVideoTracks();
 
       // Add new video track to local stream
       _localStream!.addTrack(newVideoTrack);
 
-      // Replace track in all peer connections
+      // **PERBAIKAN: Enable dan replace track di peer connections**
       for (final pc in _peerConnections.values) {
         final senders = await pc.getSenders();
         for (final sender in senders) {
@@ -687,7 +743,7 @@ class WebRTCManagerPeer {
         }
       }
 
-      // Update UI
+      // Update UI dengan stream yang baru
       _safeCallback(() => onLocalStream?.call(_localStream!));
 
       // Cleanup temporary stream
@@ -696,38 +752,106 @@ class WebRTCManagerPeer {
           track.stop();
         }
       });
+
+      print('✅ Camera enabled successfully');
     } catch (e) {
       print('❌ Error enabling camera: $e');
       rethrow;
     }
   }
 
-  Future<void> _disableCamera(List<MediaStreamTrack> tracks) async {
+
+  Future<MediaStreamTrack?> _createBlackVideoTrack() async {
     try {
+      // **PERBAIKAN: Buat canvas untuk generate black video frame**
+      // Karena Flutter WebRTC tidak support langsung create black track,
+      // kita akan buat temporary video track dan langsung stop, lalu ganti dengan approach lain
+
+      print('🎥 Creating black video placeholder...');
+
+      // Coba buat video track dengan constraints minimal
+      final constraints = {
+        'video': {
+          'width': 1,
+          'height': 1,
+          'frameRate': 1,
+        }
+      };
+
+      try {
+        final tempStream = await navigator.mediaDevices.getUserMedia(constraints);
+        final videoTrack = tempStream.getVideoTracks().first;
+
+        // **CRITICAL: Stop track immediately untuk membuatnya black/blank**
+        videoTrack.stop();
+
+        // Cleanup audio tracks dari temp stream
+        tempStream.getAudioTracks().forEach((track) => track.stop());
+
+        return videoTrack;
+      } catch (e) {
+        print('⚠️ Cannot create black video track: $e');
+        return null;
+      }
+    } catch (e) {
+      print('❌ Error creating black video track: $e');
+      return null;
+    }
+  }
+
+  Future<void> _replaceWithBlackVideoTrack() async {
+    try {
+      // Stop existing video tracks
+      await _disableCurrentVideoTracks();
+
+      // **PERBAIKAN: Untuk video mati, kita tidak perlu membuat stream baru**
+      // Cukup stop tracks dan notify UI bahwa camera mati
+      final videoTracks = _localStream!.getVideoTracks();
+      final tracks = List<MediaStreamTrack>.from(videoTracks);
+
       for (final track in tracks) {
-        _safeStopTrack(track);
+        track.stop();
+        _localStream!.removeTrack(track);
       }
 
-      // Update UI
+      // **PERBAIKAN: Untuk peer connections, replace video track dengan null**
+      for (final pc in _peerConnections.values) {
+        final senders = await pc.getSenders();
+        for (final sender in senders) {
+          if (sender.track?.kind == 'video') {
+            await sender.replaceTrack(null); // Stop sending video
+            break;
+          }
+        }
+      }
+
+      // **PERBAIKAN: Update UI untuk menunjukkan camera mati**
       _safeCallback(() => onLocalStream?.call(_localStream!));
+
     } catch (e) {
-      print('❌ Error disabling camera: $e');
+      print('❌ Error replacing with black video track: $e');
       rethrow;
     }
   }
+
 
   Future<void> _disableCurrentVideoTracks() async {
     try {
       final videoTracks = _localStream!.getVideoTracks();
       final tracks = List<MediaStreamTrack>.from(videoTracks);
 
+      print('🛑 Stopping ${tracks.length} video track(s)');
+
       for (final track in tracks) {
-        _safeStopTrack(track);
+        print('   - Stopping video track: ${track.id}');
+        track.stop();
+        _localStream!.removeTrack(track);
       }
     } catch (e) {
       print('❌ Error disabling current video tracks: $e');
     }
   }
+
 
   void _safeStopTrack(MediaStreamTrack track) {
     try {
@@ -737,19 +861,107 @@ class WebRTCManagerPeer {
     }
   }
 
+// Di WebRTCManager, buat method switchCamera yang lebih aggressive:
+
   Future<void> switchCamera() async {
     if (_localStream == null || _isProcessing || _isDisposed) return;
 
     _isProcessing = true;
     try {
       _currentCamera = _currentCamera == 'user' ? 'environment' : 'user';
-      await _enableCamera();
-      print('🔄 Switched camera to: $_currentCamera');
+
+      print('🔄 Switching camera to: $_currentCamera');
+
+      // **SOLUSI RADICAL: Buat LOCAL STREAM BARU sepenuhnya**
+      await _createNewLocalStream();
+
+      print('✅ Camera switched successfully to: $_currentCamera');
     } catch (e) {
       print('❌ Error switching camera: $e');
       _currentCamera = _currentCamera == 'user' ? 'environment' : 'user';
     } finally {
       _isProcessing = false;
+    }
+  }
+  String get currentCamera => _currentCamera;
+
+  Future<void> _createNewLocalStream() async {
+    try {
+      print('🎥 Creating COMPLETELY NEW local stream...');
+
+      final mediaConstraints = {
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+        },
+        'video': {
+          'width': {'ideal': 640},
+          'height': {'ideal': 480},
+          'frameRate': {'ideal': 30},
+          'facingMode': _currentCamera,
+        }
+      };
+
+      // **BUAT STREAM BARU SEPENUHNYA**
+      final newLocalStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+
+      // **PERBAIKAN: APPLY MUTE STATE KE STREAM BARU**
+      if (_isMuted) {
+        final audioTracks = newLocalStream.getAudioTracks();
+        for (final track in audioTracks) {
+          track.enabled = false; // Mute audio tracks baru
+        }
+        print('🔇 Applied mute state to new stream');
+      }
+
+      // **STOP DAN REPLACE LOCAL STREAM LAMA**
+      if (_localStream != null) {
+        _localStream!.getTracks().forEach((track) => track.stop());
+      }
+
+      _localStream = newLocalStream;
+
+      // **REPLACE TRACKS DI SEMUA PEER CONNECTIONS**
+      for (final entry in _peerConnections.entries) {
+        final peerId = entry.key;
+        final pc = entry.value;
+
+        // Dapatkan semua senders
+        final senders = await pc.getSenders();
+
+        // Replace audio track
+        final audioTrack = _localStream!.getAudioTracks().firstOrNull;
+        if (audioTrack != null) {
+          for (final sender in senders) {
+            if (sender.track?.kind == 'audio') {
+              await sender.replaceTrack(audioTrack);
+              break;
+            }
+          }
+        }
+
+        // Replace video track
+        final videoTrack = _localStream!.getVideoTracks().firstOrNull;
+        if (videoTrack != null) {
+          for (final sender in senders) {
+            if (sender.track?.kind == 'video') {
+              await sender.replaceTrack(videoTrack);
+              break;
+            }
+          }
+        }
+
+        print('✅ Replaced tracks for peer: $peerId');
+      }
+
+      // **NOTIFY UI TENTANG STREAM BARU**
+      _safeCallback(() => onLocalStream?.call(_localStream!));
+
+      print('✅ Completely new local stream created and applied (mute: $_isMuted)');
+
+    } catch (e) {
+      print('❌ Error creating new local stream: $e');
+      rethrow;
     }
   }
 
