@@ -1,7 +1,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:socket_io_client/socket_io_client.dart';
+import 'package:test_web_rtc/second/permission_service.dart';
 import 'package:test_web_rtc/second/video_call_screen.dart';
 import 'package:uuid/uuid.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -60,18 +62,43 @@ class _HomePageState extends State<HomePage> {
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: () {
-                  Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => VideoCallScreen(roomId: _roomCtrl.text.trim()),
-                  ));
-                  // connect("https://signaling-websocket.payuung.com", "y3m9axjs", getUserMedia());
-                  // Navigator.of(context).push(MaterialPageRoute(
-                  //   builder: (_) => CallPage(roomId: _roomCtrl.text.trim(), displayName: _nameCtrl.text.trim()),
-                  // ));
+                onPressed: () async {
+                  // Pre-check cepat sebelum request
+                  final bool hasPreflight = await PermissionService.checkEssentialPermissionsPreflight();
+
+                  if (hasPreflight) {
+                    // Jika sudah ada permission, langsung navigate dengan delay safety
+                    await Future.delayed(const Duration(milliseconds: 300));
+                    Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => VideoCallScreen(roomId: _roomCtrl.text.trim()),
+                    ));
+                    return;
+                  }
+
+                  // Jika belum, request permissions
+                  final result = await PermissionService.requestVideoCallPermissions(context);
+
+                  if (result.essentialGranted) {
+                    // Success - navigate ke VideoCallScreen
+                    Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => VideoCallScreen(roomId: _roomCtrl.text.trim()),
+                    ));
+                  } else {
+                    // Failed - show error message
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          result.error ?? 'Akses kamera dan mikrofon diperlukan untuk video call',
+                        ),
+                        backgroundColor: Colors.red,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  }
                 },
-                icon: const Icon(Icons.video_call_outlined),
-                label: const Text('Join'),
-              ),
+                icon: const Icon(Icons.video_call),
+                label: const Text('Join Video Call'),
+              )
             )
           ],
         ),

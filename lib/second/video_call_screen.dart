@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:test_web_rtc/second/webrtc_manager_peer.dart';
 
 class VideoCallScreen extends StatefulWidget {
@@ -35,12 +36,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   RTCVideoRenderer? _localRendererAlt;
   bool _useAltRenderer = false;
 
+  bool _permissionsChecked = false;
+
+
   @override
   void initState() {
     super.initState();
     print('🚀 Initializing VideoCallScreen for room: ${widget.roomId}');
-    _initializeLocalRenderer();
-    _initializeWebRTC();
+    // _initializeLocalRenderer();
+    // _initializeWebRTC();
+    _initializeWithPermissions();
+
   }
 
   // **TAMBAHKAN: Method untuk toggle controls visibility**
@@ -50,12 +56,54 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     });
   }
 
+  Future<void> _initializeWithPermissions() async {
+    try {
+      // Step 1: Initialize renderers first (aman tanpa permission)
+      await _initializeLocalRenderer();
+      print('✅ Local renderer initialized');
+
+      // Step 2: Check and request permissions if needed
+      final cameraStatus = await Permission.camera.status;
+      final micStatus = await Permission.microphone.status;
+
+      print('📊 Permission status - Camera: $cameraStatus, Mic: $micStatus');
+
+      if (!cameraStatus.isGranted || !micStatus.isGranted) {
+        print('🔄 Requesting permissions...');
+        final statuses = await [Permission.camera, Permission.microphone].request();
+
+        if (statuses[Permission.camera]?.isGranted == true &&
+            statuses[Permission.microphone]?.isGranted == true) {
+          print('✅ Permissions granted, initializing WebRTC...');
+          // Tunggu sebentar sebelum initialize WebRTC
+          await Future.delayed(const Duration(milliseconds: 300));
+          _initializeWebRTC();
+        } else {
+          print('❌ Permissions denied');
+          _showPermissionError();
+          return;
+        }
+      } else {
+        // Permissions already granted, langsung initialize WebRTC
+        print('✅ Permissions already granted, initializing WebRTC...');
+        _initializeWebRTC();
+      }
+
+      setState(() {
+        _permissionsChecked = true;
+      });
+
+    } catch (e) {
+      print('❌ Initialization error: $e');
+      _showError('Initialization failed: $e');
+    }
+  }
+
   Future<void> _initializeLocalRenderer() async {
     try {
       _localRenderer = RTCVideoRenderer();
       await _localRenderer!.initialize();
 
-      // **BUAT ALTERNATE RENDERER**
       _localRendererAlt = RTCVideoRenderer();
       await _localRendererAlt!.initialize();
 
@@ -75,30 +123,18 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       });
     };
 
-    /*_webRTCManager.onLocalStream = (stream) {
-      print('📹 Local stream ready');
-      setState(() {
-        _localStream = stream;
-        if (_localRenderer != null) {
-          _localRenderer!.srcObject = stream;
-        }
-      });
-    };*/
     _webRTCManager.onLocalStream = (stream) {
       print('📹 LOCAL STREAM UPDATED - Refreshing UI');
 
       setState(() {
         _localStream = stream;
-
-        // **FORCE UPDATE RENDERER DENGAN STREAM BARU**
         if (_localRenderer != null) {
           _localRenderer!.srcObject = stream;
           print('✅ Local renderer updated with new stream');
         }
       });
 
-      // **EXTRA REFRESHES UNTUK MEMASTIKAN**
-      Future.delayed(Duration(milliseconds: 300), () {
+      Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) {
           setState(() {});
           print('✅ Extra UI refresh completed');
@@ -160,8 +196,61 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
+  void _showPermissionError() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Permission Required'),
+          content: const Text('Camera and microphone access is required for video call.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      ).then((_) {
+        Navigator.pop(context); // Kembali ke previous screen
+      });
+    });
+  }
+
+  void _showError(String message) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    });
+  }
+
+
   @override
   Widget build(BuildContext context) {
+    if (!_permissionsChecked) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 20),
+              Text(
+                'Checking permissions...',
+                style: TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: GestureDetector(
@@ -502,7 +591,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   Widget _buildCameraOffPlaceholder() {
     return Container(
       color: Colors.black,
-      child: Column(
+      child: const Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.videocam_off, size: 32, color: Colors.white54),
