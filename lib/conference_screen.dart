@@ -1,7 +1,4 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:test_web_rtc/signaling_service.dart';
-import 'package:test_web_rtc/second/webrtc_manager.dart';
+
 /*
 
 class ConferenceScreen extends StatefulWidget {

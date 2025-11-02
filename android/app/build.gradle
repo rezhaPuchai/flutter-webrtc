@@ -24,20 +24,46 @@ android {
         applicationId = "com.example.test_web_rtc"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 21
         targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled true
+
+        // TAMBAHKAN: OpenGL configuration
+        renderscriptTargetApi 21
+        renderscriptSupportModeEnabled true
+
+        // NDK filters
+        ndk {
+            abiFilters "arm64-v8a", "armeabi-v7a"
+        }
+
+        // TAMBAHKAN: External native build untuk OpenGL
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17"
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+
     }
 
     buildTypes {
-        release {
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
         debug {
+            debuggable true
             minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+
+            // TAMBAHKAN: Debug configuration
+            jniDebuggable true
+            renderscriptDebuggable true
+        }
+        release {
+            debuggable false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     /*buildTypes {

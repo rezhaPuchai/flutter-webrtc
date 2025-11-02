@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
-class WebRTCManagerPeer {
+class RtcManager {
   late io.Socket socket;
   String? selfId;
   String? roomId;
@@ -18,13 +18,92 @@ class WebRTCManagerPeer {
   String _currentCamera = 'user';
 
   // Callbacks untuk UI
+  Function()? onConnected;
   Function(MediaStream)? onLocalStream;
   Function(String peerId, MediaStream)? onRemoteStream;
   Function(String peerId)? onPeerDisconnected;
   Function(String)? onError;
-  Function()? onConnected;
 
-  WebRTCManagerPeer();
+  // Getters
+  MediaStream? get localStream => _localStream;
+  // Map<String, RTCVideoRenderer> get remoteRenderers => _remoteRenderers;
+  bool get isMuted => _isMuted;
+  bool get isCameraOn => _isCameraOn;
+  // String? get currentRoomId => roomId;
+  // String? get currentUserId => selfId;
+  String get currentCamera => _currentCamera;
+  bool get isProcessing => _isProcessing;
+
+
+
+  bool _eglErrorOccurred = false;
+  int _eglErrorCount = 0;
+
+  static Map<String, dynamic> get androidConfig {
+    return {
+      'iceServers': [
+        {
+          'urls': [
+            'stun:stun.l.google.com:19302',
+            'stun:stun1.l.google.com:19302',
+            'stun:stun2.l.google.com:19302',
+          ]
+        },
+      ],
+      'sdpSemantics': 'unified-plan',
+      'bundlePolicy': 'max-bundle',
+      'rtcpMuxPolicy': 'require',
+      'iceCandidatePoolSize': 1, // Reduce untuk performance
+
+      // TAMBAHKAN: Codec preferences untuk avoid hardware issues
+      'codecPreferences': {
+        'video': [
+          'VP8', // Prioritize VP8 over H.264 untuk compatibility
+          'H264',
+          'VP9'
+        ]
+      }
+    };
+  }
+  static Map<String, dynamic> get mediaConstraints {
+    return {
+      'audio': {
+        'echoCancellation': true,
+        'noiseSuppression': true,
+        'autoGainControl': true,
+        'googEchoCancellation': true,
+        'googAutoGainControl': true,
+        'googNoiseSuppression': true,
+        'googHighpassFilter': true,
+      },
+      'video': {
+        'width': {'ideal': 640, 'max': 1280},
+        'height': {'ideal': 480, 'max': 720},
+        'frameRate': {'ideal': 30, 'max': 60}, // Reduce dari 60 ke 30
+        'facingMode': 'user',
+
+        // TAMBAHKAN: Advanced constraints untuk stability
+        'deviceId': 'default',
+        'groupId': 'default',
+      }
+    };
+  }
+  // TAMBAHKAN: Software fallback configuration
+  static Map<String, dynamic> get softwareFallbackConfig {
+    return {
+      'iceServers': [
+        {'urls': 'stun:stun.l.google.com:19302'},
+      ],
+      'sdpSemantics': 'unified-plan',
+
+      // Force software codecs
+      'forceSoftwareCodecs': true,
+      'offerToReceiveAudio': true,
+      'offerToReceiveVideo': true,
+    };
+  }
+
+  RtcManager();
 
   Future<void> connect(String signalingUrl, String roomId) async {
     if (_isDisposed) return;
@@ -34,85 +113,16 @@ class WebRTCManagerPeer {
     try {
       debugPrint('🚀 Connecting to room: $roomId');
 
-      // Dapatkan media stream lokal terlebih dahulu
+      // Ambil media stream lokal terlebih dahulu
       await _getUserMedia();
 
       // Setup koneksi socket dengan protocol yang benar
       _setupSocketConnection(signalingUrl, roomId);
 
     } catch (e) {
-      debugPrint('❌ Error connecting: $e');
+      debugPrint('❌ Error connect: $e');
       _safeCallback(() => onError?.call('Failed to connect: $e'));
     }
-  }
-
-  void _setupSocketConnection(String signalingUrl, String roomId) {
-    if (_isDisposed) return;
-
-    debugPrint('🔄 Setting up socket connection to: $signalingUrl');
-
-    socket = io.io(
-      signalingUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket'])
-          .disableAutoConnect()
-          .build(),
-    );
-
-    socket.connect();
-
-    // Event handlers sesuai server protocol
-    socket.onConnect((_) {
-      if (_isDisposed) return;
-      selfId = socket.id;
-      debugPrint('✅ SOCKET CONNECTED: $selfId to room: $roomId');
-
-      // Join room - sesuai server expect
-      debugPrint('📤 EMITTING join event: $roomId');
-      socket.emit('join', roomId);
-
-      _safeCallback(() => onConnected?.call());
-    });
-
-    socket.onDisconnect((_) {
-      debugPrint('❌ SOCKET DISCONNECTED');
-    });
-
-    socket.onError((error) {
-      debugPrint('❌ SOCKET ERROR: $error');
-      _safeCallback(() => onError?.call('Socket error: $error'));
-    });
-
-    // **EVENT HANDLER YANG SESUAI SERVER PROTOCOL**
-
-    // Event 'peers' - dapatkan daftar peer yang sudah di room
-    socket.on('peers', (data) {
-      debugPrint('👥 PEERS EVENT: $data');
-      _handlePeersEvent(data);
-    });
-
-    // Event 'signal' - handle semua signaling (offer, answer, candidate)
-    socket.on('signal', (data) {
-      _logSignalDetails(data); // **TAMBAHKAN: Detailed logging**
-      debugPrint('📨 SIGNAL EVENT: $data');
-      _handleSignalEvent(data);
-    });
-
-    // Event untuk user management
-    socket.on('user-joined', (data) {
-      debugPrint('🟢 USER JOINED: $data');
-      _handleUserJoined(data);
-    });
-
-    socket.on('user-left', (data) {
-      debugPrint('🔴 USER LEFT: $data');
-      _handleUserLeft(data);
-    });
-
-    // Debug events
-    socket.onAny((event, data) {
-      debugPrint('📡 [ALL EVENTS] $event: $data');
-    });
   }
 
   Future<void> _getUserMedia() async {
@@ -136,7 +146,7 @@ class WebRTCManagerPeer {
       debugPrint('✅ Got local media stream with ${_localStream!.getTracks().length} tracks');
 
       _localStream!.getTracks().forEach((track) {
-        debugPrint('   - ${track.kind} track: ${track.id}');
+        debugPrint('🎥 ${track.kind}: ${track.id}');
       });
 
       _safeCallback(() => onLocalStream?.call(_localStream!));
@@ -147,7 +157,75 @@ class WebRTCManagerPeer {
     }
   }
 
-  // Handle 'peers' event - buat koneksi ke setiap peer
+
+  void _setupSocketConnection(String signalingUrl, String roomId) {
+    if (_isDisposed) return;
+
+    debugPrint('🔄 Setting up socket connection to: $signalingUrl');
+
+    socket = io.io(
+      signalingUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .disableAutoConnect()
+          .build(),
+    );
+
+    socket.connect();
+
+    socket.onConnect((_) {
+      if (_isDisposed) return;
+      selfId = socket.id;
+      debugPrint('✅ SOCKET CONNECTED: $selfId to room: $roomId ✅');
+
+      // Join room - sesuai server expect
+      debugPrint('📤 EMITTING join event: $roomId');
+      socket.emit('join', roomId);
+
+      _safeCallback(() => onConnected?.call());
+    });
+
+    socket.onDisconnect((_) {
+      debugPrint('❌ SOCKET DISCONNECTED');
+    });
+
+    socket.onError((error) {
+      debugPrint('❌ SOCKET ERROR: $error');
+      _safeCallback(() => onError?.call('Socket error: $error'));
+    });
+
+    socket.on('peers', (data) {
+      debugPrint('👥 PEERS EVENT: $data');
+      _handlePeersEvent(data);
+    });
+
+    socket.on('signal', (data) {
+      _logSignalDetails(data);
+      debugPrint('📨 SIGNAL EVENT: $data');
+      _handleSignalEvent(data);
+    });
+
+    socket.on('connect', (data) {
+      debugPrint('# connect: $data');
+      // _handleUserJoined(data);
+    });
+
+    socket.on('user-joined', (data) {
+      debugPrint('🟢 USER JOINED: $data');
+      // _handleUserJoined(data);
+    });
+
+    socket.on('user-left', (data) {
+      debugPrint('🔴 USER LEFT: $data');
+      // _handleUserLeft(data);
+    });
+
+    socket.onAny((event, data) {
+      debugPrint('📡 [ALL EVENTS - onAny] $event: $data');
+    });
+  }
+
+
   void _handlePeersEvent(dynamic peerIds) {
     if (_isDisposed || _localStream == null) return;
 
@@ -164,255 +242,27 @@ class WebRTCManagerPeer {
     }
   }
 
-  // Handle user joined event
-  void _handleUserJoined(dynamic data) {
-    if (_isDisposed || _localStream == null) return;
-
-    final peerId = data['userId'];
-    if (peerId != selfId && !_peerConnections.containsKey(peerId)) {
-      debugPrint('🔗 User joined, creating peer connection to: $peerId');
-      _createPeerConnection(peerId);
-    }
-  }
-
-  // Handle user left event
-  void _handleUserLeft(dynamic data) {
-    if (_isDisposed) return;
-
-    final peerId = data['userId'];
-    debugPrint('🔴 Cleaning up peer: $peerId');
-
-    _cleanupPeer(peerId);
-    _safeCallback(() => onPeerDisconnected?.call(peerId));
-  }
-
-  // Handle 'signal' event - process offer/answer/candidate
-  /*FIXED, dont delete this void _handleSignalEvent(dynamic data) async {
-    if (_isDisposed) return;
-
-    final from = data['from'];
-    final signalData = data['data'];
-    final type = signalData['type'];
-
-    debugPrint('🎯 Handling signal from $from - type: $type');
-
-    final pc = _peerConnections[from];
-    if (pc == null) {
-      debugPrint('❌ No peer connection for: $from, creating one...');
-      await _createPeerConnection(from);
-      return;
-    }
-
-    try {
-      switch (type) {
-        case 'offer':
-          await _handleRemoteOffer(pc, from, signalData);
-          break;
-        case 'answer':
-          await _handleRemoteAnswer(pc, signalData);
-          break;
-        case 'candidate':
-          await _handleRemoteCandidate(pc, signalData);
-          break;
-        default:
-          debugPrint('❌ Unknown signal type: $type');
-      }
-    } catch (e) {
-      debugPrint('❌ Error handling signal: $e');
-    }
-  }*/
-  // Di WebRTCManager, perbaiki _handleSignalEvent:
-
-  final Map<String, bool> _signalProcessing = {};
-  void _handleSignalEvent(dynamic data) async {
-    if (_isDisposed) return;
-
-    final from = data['from'];
-    final signalData = data['data'];
-    final type = signalData['type'];
-
-    debugPrint('🎯 Handling signal from $from - type: $type');
-
-    // **PERBAIKAN: Tambahkan delay untuk memastikan processing order**
-    await Future.delayed(const Duration(milliseconds: 100));
-
-    // Jika belum ada peer connection, buat dulu dengan retry mechanism
-    if (!_peerConnections.containsKey(from)) {
-      debugPrint('🆕 Creating peer connection for signal from: $from');
-      await _createPeerConnectionWithRetry(from);
-
-      // **PERBAIKAN: Tunggu lebih lama setelah membuat peer connection**
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-
-    final pc = _peerConnections[from];
-    if (pc == null) {
-      debugPrint('❌ Failed to create peer connection for: $from');
-      return;
-    }
-
-    try {
-      switch (type) {
-        case 'offer':
-          await _handleRemoteOfferWithRetry(pc, from, signalData);
-          break;
-        case 'answer':
-          await _handleRemoteAnswerWithRetry(pc, signalData);
-          break;
-        case 'candidate':
-          await _handleRemoteCandidateWithRetry(pc, signalData);
-          break;
-        default:
-          debugPrint('❌ Unknown signal type: $type');
-      }
-    } catch (e) {
-      debugPrint('❌ Error handling signal: $e');
-
-      // **PERBAIKAN: Retry mechanism untuk signal processing**
-      debugPrint('🔄 Retrying signal handling in 1 second...');
-      Future.delayed(const Duration(seconds: 1), () {
-        if (!_isDisposed && _peerConnections.containsKey(from)) {
-          _handleSignalEvent(data);
-        }
-      });
-    }
-  }
-
-// **TAMBAHKAN: Method dengan retry mechanism**
-  Future<void> _createPeerConnectionWithRetry(String peerId) async {
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries && !_isDisposed) {
-      try {
-        await _createPeerConnection(peerId);
-        debugPrint('✅ Successfully created peer connection for: $peerId');
-        return;
-      } catch (e) {
-        retryCount++;
-        debugPrint('❌ Failed to create peer connection for $peerId (attempt $retryCount/$maxRetries): $e');
-
-        if (retryCount < maxRetries) {
-          debugPrint('⏳ Retrying in ${retryCount * 500}ms...');
-          await Future.delayed(Duration(milliseconds: retryCount * 500));
-        }
-      }
-    }
-
-    if (retryCount >= maxRetries) {
-      debugPrint('❌ Failed to create peer connection for $peerId after $maxRetries attempts');
-    }
-  }
-
-// **TAMBAHKAN: Method dengan retry untuk offer handling**
-  Future<void> _handleRemoteOfferWithRetry(RTCPeerConnection pc, String from, dynamic offerData) async {
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries && !_isDisposed) {
-      try {
-        await _handleRemoteOffer(pc, from, offerData);
-        debugPrint('✅ Successfully handled offer from: $from');
-        return;
-      } catch (e) {
-        retryCount++;
-        debugPrint('❌ Failed to handle offer from $from (attempt $retryCount/$maxRetries): $e');
-
-        if (retryCount < maxRetries) {
-          debugPrint('⏳ Retrying offer handling in ${retryCount * 500}ms...');
-          await Future.delayed(Duration(milliseconds: retryCount * 500));
-        }
-      }
-    }
-  }
-
-// **TAMBAHKAN: Method dengan retry untuk answer handling**
-  Future<void> _handleRemoteAnswerWithRetry(RTCPeerConnection pc, dynamic answerData) async {
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries && !_isDisposed) {
-      try {
-        await _handleRemoteAnswer(pc, answerData);
-        debugPrint('✅ Successfully handled answer');
-        return;
-      } catch (e) {
-        retryCount++;
-        debugPrint('❌ Failed to handle answer (attempt $retryCount/$maxRetries): $e');
-
-        if (retryCount < maxRetries) {
-          debugPrint('⏳ Retrying answer handling in ${retryCount * 500}ms...');
-          await Future.delayed(Duration(milliseconds: retryCount * 500));
-        }
-      }
-    }
-  }
-
-// **TAMBAHKAN: Method dengan retry untuk candidate handling**
-  Future<void> _handleRemoteCandidateWithRetry(RTCPeerConnection pc, dynamic candidateData) async {
-    int retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries && !_isDisposed) {
-      try {
-        await _handleRemoteCandidate(pc, candidateData);
-        debugPrint('✅ Successfully handled ICE candidate');
-        return;
-      } catch (e) {
-        retryCount++;
-        debugPrint('❌ Failed to handle ICE candidate (attempt $retryCount/$maxRetries): $e');
-
-        if (retryCount < maxRetries) {
-          debugPrint('⏳ Retrying candidate handling in ${retryCount * 500}ms...');
-          await Future.delayed(Duration(milliseconds: retryCount * 500));
-        }
-      }
-    }
-  }
-
-  // **TAMBAHKAN: Method untuk detailed logging**
-  void _logSignalDetails(dynamic data) {
-    final from = data['from'];
-    final signalData = data['data'];
-    final type = signalData['type'];
-
-    debugPrint('''
-📨 SIGNAL EVENT DETAILS:
-   - From: $from
-   - Type: $type
-   - Room: $roomId
-   - Self: $selfId
-   - Timestamp: ${DateTime.now().toIso8601String()}
-   - Peer Connections: ${_peerConnections.length}
-   - Remote Renderers: ${_remoteRenderers.length}
-''');
-
-    if (type == 'offer' || type == 'answer') {
-      final sdp = signalData['sdp'];
-      if (sdp is String) {
-        debugPrint('   - SDP Preview: ${sdp.substring(0, 100)}...');
-      }
-    }
-  }
-
-  // Buat peer connection untuk peer tertentu
   Future<void> _createPeerConnection(String peerId) async {
     if (_isDisposed || _localStream == null) return;
-
     try {
       debugPrint('🔗 Creating peer connection for: $peerId');
 
-      final configuration = {
-        'iceServers': [
-          {'urls': 'stun:stun.l.google.com:19302'},
-          {'urls': 'stun:stun1.l.google.com:19302'},
-        ]
-      };
+      // backup
+      // final configuration = {
+      //   'iceServers': [
+      //     {'urls': 'stun:stun.l.google.com:19302'},
+      //     {'urls': 'stun:stun1.l.google.com:19302'},
+      //   ]
+      // };
+
+      final configuration = _eglErrorOccurred
+          ? softwareFallbackConfig
+          : androidConfig;
 
       final pc = await createPeerConnection(configuration);
+
       _peerConnections[peerId] = pc;
 
-      // Setup event handlers
       pc.onIceCandidate = (RTCIceCandidate candidate) {
         if (_isDisposed) return;
         debugPrint('🧊 ICE Candidate to $peerId: ${candidate.candidate}');
@@ -454,47 +304,202 @@ class WebRTCManagerPeer {
         debugPrint('🧊 ICE connection state with $peerId: $state');
       };
 
-      // Add local tracks
       _localStream!.getTracks().forEach((track) {
         pc.addTrack(track, _localStream!);
       });
 
       debugPrint('✅ Peer connection created for: $peerId');
+    } catch (e, stack) {
 
-    } catch (e) {
       debugPrint('❌ Error creating peer connection: $e');
+      print('❌ [SIMULATOR] Error creating peer connection: $e');
+      print('Stack: $stack');
+
+      // TAMBAHKAN: Try software fallback pada error
+      if (!_eglErrorOccurred && e.toString().contains('EGL') || e.toString().contains('OpenGL')) {
+        print('🔄 [SIMULATOR] EGL error detected, switching to software fallback');
+        _eglErrorOccurred = true;
+        _eglErrorCount++;
+
+        // Retry dengan software configuration
+        if (_eglErrorCount <= 3) {
+          await Future.delayed(const Duration(seconds: 1));
+          return _createPeerConnection(peerId);
+        }
+      }
+
+      _peerConnections.remove(peerId);
     }
   }
 
-  // Buat offer ke peer tertentu (dipanggil setelah peer connection dibuat)
-  Future<void> _createOfferToPeer(String peerId) async {
-    final pc = _peerConnections[peerId];
-    if (pc == null) return;
+  void _addRemoteStream(String peerId, MediaStream stream) {
+    if (_isDisposed) return;
+
+    debugPrint('📹 Adding remote stream from $peerId with ${stream.getTracks().length} tracks');
+
+    final renderer = RTCVideoRenderer();
+
+    renderer.initialize().then((_) {
+      if (_isDisposed) {
+        renderer.dispose();
+        return;
+      }
+
+      renderer.srcObject = stream;
+      _remoteRenderers[peerId] = renderer;
+
+      // Panggil callback untuk update UI
+      _safeCallback(() => onRemoteStream?.call(peerId, stream));
+      debugPrint('✅ Remote renderer created for: $peerId');
+    }).catchError((e) {
+      debugPrint('❌ Error initializing remote renderer: $e');
+    });
+  }
+
+
+
+  void _handleSignalEvent(dynamic data) async {
+    if (_isDisposed) return;
+
+    final from = data['from'];
+    final signalData = data['data'];
+    final type = signalData['type'];
+
+    debugPrint('🎯 Handling signal from $from - type: $type');
+
+    // Tambahkan delay untuk memastikan processing order
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    // Jika belum ada peer connection, buat dulu dengan retry mechanism
+    if (!_peerConnections.containsKey(from)) {
+      debugPrint('🆕 Creating peer connection for signal from: $from');
+      await _createPeerConnectionWithRetry(from);
+
+      // Tunggu lebih lama setelah membuat peer connection
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    final pc = _peerConnections[from];
+    if (pc == null) {
+      debugPrint('❌ Failed to create peer connection for: $from');
+      return;
+    }
 
     try {
-      debugPrint('📤 Creating offer to: $peerId');
+      switch (type) {
+        case 'offer':
+          await _handleRemoteOfferWithRetry(pc, from, signalData);
+          break;
+        case 'answer':
+          await _handleRemoteAnswerWithRetry(pc, signalData);
+          break;
+        case 'candidate':
+          await _handleRemoteCandidateWithRetry(pc, signalData);
+          break;
+        default:
+          debugPrint('❌ Unknown signal type: $type');
+      }
+    } catch (e) {
+      debugPrint('❌ Error handling signal: $e');
 
-      final offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // Kirim offer via signal event
-      socket.emit('signal', {
-        'roomId': roomId,
-        'to': peerId,
-        'data': {
-          'type': 'offer',
-          'sdp': offer.sdp,
-          'type': offer.type,
+      // Retry mechanism untuk signal processing
+      debugPrint('🔄 Retrying signal handling in 1 second...');
+      Future.delayed(const Duration(seconds: 1), () {
+        if (!_isDisposed && _peerConnections.containsKey(from)) {
+          _handleSignalEvent(data);
         }
       });
-
-      debugPrint('✅ Offer sent to: $peerId');
-    } catch (e) {
-      debugPrint('❌ Error creating offer to $peerId: $e');
     }
   }
 
-  // Handle remote offer
+  Future<void> _createPeerConnectionWithRetry(String peerId) async {
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries && !_isDisposed) {
+      try {
+        await _createPeerConnection(peerId);
+        debugPrint('✅ Successfully created peer connection for: $peerId');
+        return;
+      } catch (e) {
+        retryCount++;
+        debugPrint('❌ Failed to create peer connection for $peerId (attempt $retryCount/$maxRetries): $e');
+
+        if (retryCount < maxRetries) {
+          debugPrint('⏳ Retrying in ${retryCount * 500}ms...');
+          await Future.delayed(Duration(milliseconds: retryCount * 500));
+        }
+      }
+    }
+
+    if (retryCount >= maxRetries) {
+      debugPrint('❌ Failed to create peer connection for $peerId after $maxRetries attempts');
+    }
+  }
+
+  Future<void> _handleRemoteOfferWithRetry(RTCPeerConnection pc, String from, dynamic offerData) async {
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries && !_isDisposed) {
+      try {
+        await _handleRemoteOffer(pc, from, offerData);
+        debugPrint('✅ Successfully handled offer from: $from');
+        return;
+      } catch (e) {
+        retryCount++;
+        debugPrint('❌ Failed to handle offer from $from (attempt $retryCount/$maxRetries): $e');
+
+        if (retryCount < maxRetries) {
+          debugPrint('⏳ Retrying offer handling in ${retryCount * 500}ms...');
+          await Future.delayed(Duration(milliseconds: retryCount * 500));
+        }
+      }
+    }
+  }
+
+  Future<void> _handleRemoteAnswerWithRetry(RTCPeerConnection pc, dynamic answerData) async {
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries && !_isDisposed) {
+      try {
+        await _handleRemoteAnswer(pc, answerData);
+        debugPrint('✅ Successfully handled answer');
+        return;
+      } catch (e) {
+        retryCount++;
+        debugPrint('❌ Failed to handle answer (attempt $retryCount/$maxRetries): $e');
+
+        if (retryCount < maxRetries) {
+          debugPrint('⏳ Retrying answer handling in ${retryCount * 500}ms...');
+          await Future.delayed(Duration(milliseconds: retryCount * 500));
+        }
+      }
+    }
+  }
+
+  Future<void> _handleRemoteCandidateWithRetry(RTCPeerConnection pc, dynamic candidateData) async {
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries && !_isDisposed) {
+      try {
+        await _handleRemoteCandidate(pc, candidateData);
+        debugPrint('✅ Successfully handled ICE candidate');
+        return;
+      } catch (e) {
+        retryCount++;
+        debugPrint('❌ Failed to handle ICE candidate (attempt $retryCount/$maxRetries): $e');
+
+        if (retryCount < maxRetries) {
+          debugPrint('⏳ Retrying candidate handling in ${retryCount * 500}ms...');
+          await Future.delayed(Duration(milliseconds: retryCount * 500));
+        }
+      }
+    }
+  }
+
   Future<void> _handleRemoteOffer(RTCPeerConnection pc, String from, dynamic offerData) async {
     try {
       debugPrint('📨 Handling offer from $from');
@@ -523,7 +528,6 @@ class WebRTCManagerPeer {
     }
   }
 
-  // Handle remote answer
   Future<void> _handleRemoteAnswer(RTCPeerConnection pc, dynamic answerData) async {
     try {
       debugPrint('📨 Handling answer from peer');
@@ -538,7 +542,6 @@ class WebRTCManagerPeer {
     }
   }
 
-  // Handle remote ICE candidate
   Future<void> _handleRemoteCandidate(RTCPeerConnection pc, dynamic candidateData) async {
     try {
       debugPrint('🧊 Handling ICE candidate from peer');
@@ -556,58 +559,10 @@ class WebRTCManagerPeer {
     }
   }
 
-  // Tambahkan remote stream ke UI
-  void _addRemoteStream(String peerId, MediaStream stream) {
-    if (_isDisposed) return;
 
-    debugPrint('📹 Adding remote stream from $peerId with ${stream.getTracks().length} tracks');
 
-    final renderer = RTCVideoRenderer();
-
-    renderer.initialize().then((_) {
-      if (_isDisposed) {
-        renderer.dispose();
-        return;
-      }
-
-      renderer.srcObject = stream;
-      _remoteRenderers[peerId] = renderer;
-
-      // Panggil callback untuk update UI
-      _safeCallback(() => onRemoteStream?.call(peerId, stream));
-      debugPrint('✅ Remote renderer created for: $peerId');
-    }).catchError((e) {
-      debugPrint('❌ Error initializing remote renderer: $e');
-    });
-  }
-
-  // Cleanup peer connection
-  void _cleanupPeer(String peerId) {
-    final pc = _peerConnections[peerId];
-    if (pc != null) {
-      pc.close();
-      _peerConnections.remove(peerId);
-    }
-
-    final renderer = _remoteRenderers[peerId];
-    if (renderer != null) {
-      renderer.dispose();
-      _remoteRenderers.remove(peerId);
-    }
-
-    debugPrint('✅ Cleaned up peer: $peerId');
-  }
-
-  void _safeCallback(Function() callback) {
-    if (!_isDisposed) {
-      callback();
-    }
-  }
-
-  // Public methods untuk UI control
   Future<void> toggleMute() async {
     if (_localStream == null || _isProcessing || _isDisposed) return;
-
     _isProcessing = true;
     try {
       final audioTracks = _localStream!.getAudioTracks();
@@ -615,11 +570,9 @@ class WebRTCManagerPeer {
 
       if (tracks.isNotEmpty) {
         _isMuted = !_isMuted;
-
         for (final track in tracks) {
           track.enabled = !_isMuted;
         }
-
         debugPrint('🎤 Audio ${_isMuted ? 'muted' : 'unmuted'}');
       }
     } catch (e) {
@@ -629,8 +582,7 @@ class WebRTCManagerPeer {
       _isProcessing = false;
     }
   }
-
-
+  
   Future<void> toggleCamera() async {
     if (_localStream == null || _isProcessing || _isDisposed) return;
 
@@ -640,17 +592,16 @@ class WebRTCManagerPeer {
 
       debugPrint('📷 Camera ${_isCameraOn ? 'enabling' : 'disabling'}');
 
-      // **SIMPLE SOLUTION: Enable/disable video tracks tanpa ganti stream**
       final videoTracks = _localStream!.getVideoTracks();
       final tracks = List<MediaStreamTrack>.from(videoTracks);
 
       if (tracks.isNotEmpty) {
         for (final track in tracks) {
           track.enabled = _isCameraOn;
-          debugPrint('   - Video track ${track.id} ${_isCameraOn ? 'enabled' : 'disabled'}');
+          debugPrint(' - Video track ${track.id} ${_isCameraOn ? 'enabled' : 'disabled'}');
         }
 
-        // **PERBAIKAN: Juga enable/disable di peer connection senders**
+        // enable/disable di peer connection senders
         for (final pc in _peerConnections.values) {
           final senders = await pc.getSenders();
           for (final sender in senders) {
@@ -659,7 +610,6 @@ class WebRTCManagerPeer {
             }
           }
         }
-
         // Update UI
         _safeCallback(() => onLocalStream?.call(_localStream!));
       } else if (_isCameraOn) {
@@ -673,42 +623,6 @@ class WebRTCManagerPeer {
       _isCameraOn = !_isCameraOn;
     } finally {
       _isProcessing = false;
-    }
-  }
-
-  Future<void> _disableCamera() async {
-    try {
-      debugPrint('🎥 Disabling camera with black video...');
-
-      // **PERBAIKAN: Gunakan approach yang berbeda - disable tracks tanpa remove**
-      final videoTracks = _localStream!.getVideoTracks();
-      final tracks = List<MediaStreamTrack>.from(videoTracks);
-
-      for (final track in tracks) {
-        // **PERBAIKAN: Daripada stop dan remove, cukup disable track**
-        track.enabled = false;
-        debugPrint('   - Disabled video track: ${track.id}');
-      }
-
-      // **PERBAIKAN: Untuk peer connections, jangan replace dengan null**
-      // Biarkan track tetap ada tapi disabled, sehingga remote tidak stuck
-      for (final pc in _peerConnections.values) {
-        final senders = await pc.getSenders();
-        for (final sender in senders) {
-          if (sender.track?.kind == 'video' && sender.track != null) {
-            // **CRITICAL: Enable/disable track instead of replacing dengan null**
-            sender.track!.enabled = false;
-          }
-        }
-      }
-
-      // **PERBAIKAN: Update UI untuk menunjukkan camera mati**
-      _safeCallback(() => onLocalStream?.call(_localStream!));
-
-      debugPrint('✅ Camera disabled - video tracks disabled (not removed)');
-    } catch (e) {
-      debugPrint('❌ Error disabling camera: $e');
-      rethrow;
     }
   }
 
@@ -728,13 +642,13 @@ class WebRTCManagerPeer {
       final newStream = await navigator.mediaDevices.getUserMedia(videoConstraints);
       final newVideoTrack = newStream.getVideoTracks().first;
 
-      // **PERBAIKAN: Stop existing video tracks yang disabled**
+      // Stop existing video tracks yang disabled
       await _disableCurrentVideoTracks();
 
       // Add new video track to local stream
       _localStream!.addTrack(newVideoTrack);
 
-      // **PERBAIKAN: Enable dan replace track di peer connections**
+      // Enable dan replace track di peer connections
       for (final pc in _peerConnections.values) {
         final senders = await pc.getSenders();
         for (final sender in senders) {
@@ -744,98 +658,20 @@ class WebRTCManagerPeer {
           }
         }
       }
-
       // Update UI dengan stream yang baru
       _safeCallback(() => onLocalStream?.call(_localStream!));
-
       // Cleanup temporary stream
       newStream.getTracks().forEach((track) {
         if (track != newVideoTrack) {
           track.stop();
         }
       });
-
       debugPrint('✅ Camera enabled successfully');
     } catch (e) {
       debugPrint('❌ Error enabling camera: $e');
       rethrow;
     }
   }
-
-
-  Future<MediaStreamTrack?> _createBlackVideoTrack() async {
-    try {
-      // **PERBAIKAN: Buat canvas untuk generate black video frame**
-      // Karena Flutter WebRTC tidak support langsung create black track,
-      // kita akan buat temporary video track dan langsung stop, lalu ganti dengan approach lain
-
-      debugPrint('🎥 Creating black video placeholder...');
-
-      // Coba buat video track dengan constraints minimal
-      final constraints = {
-        'video': {
-          'width': 1,
-          'height': 1,
-          'frameRate': 1,
-        }
-      };
-
-      try {
-        final tempStream = await navigator.mediaDevices.getUserMedia(constraints);
-        final videoTrack = tempStream.getVideoTracks().first;
-
-        // **CRITICAL: Stop track immediately untuk membuatnya black/blank**
-        videoTrack.stop();
-
-        // Cleanup audio tracks dari temp stream
-        tempStream.getAudioTracks().forEach((track) => track.stop());
-
-        return videoTrack;
-      } catch (e) {
-        debugPrint('⚠️ Cannot create black video track: $e');
-        return null;
-      }
-    } catch (e) {
-      debugPrint('❌ Error creating black video track: $e');
-      return null;
-    }
-  }
-
-  Future<void> _replaceWithBlackVideoTrack() async {
-    try {
-      // Stop existing video tracks
-      await _disableCurrentVideoTracks();
-
-      // **PERBAIKAN: Untuk video mati, kita tidak perlu membuat stream baru**
-      // Cukup stop tracks dan notify UI bahwa camera mati
-      final videoTracks = _localStream!.getVideoTracks();
-      final tracks = List<MediaStreamTrack>.from(videoTracks);
-
-      for (final track in tracks) {
-        track.stop();
-        _localStream!.removeTrack(track);
-      }
-
-      // **PERBAIKAN: Untuk peer connections, replace video track dengan null**
-      for (final pc in _peerConnections.values) {
-        final senders = await pc.getSenders();
-        for (final sender in senders) {
-          if (sender.track?.kind == 'video') {
-            await sender.replaceTrack(null); // Stop sending video
-            break;
-          }
-        }
-      }
-
-      // **PERBAIKAN: Update UI untuk menunjukkan camera mati**
-      _safeCallback(() => onLocalStream?.call(_localStream!));
-
-    } catch (e) {
-      debugPrint('❌ Error replacing with black video track: $e');
-      rethrow;
-    }
-  }
-
 
   Future<void> _disableCurrentVideoTracks() async {
     try {
@@ -845,7 +681,7 @@ class WebRTCManagerPeer {
       debugPrint('🛑 Stopping ${tracks.length} video track(s)');
 
       for (final track in tracks) {
-        debugPrint('   - Stopping video track: ${track.id}');
+        debugPrint(' - Stopping video track: ${track.id}');
         track.stop();
         _localStream!.removeTrack(track);
       }
@@ -854,27 +690,14 @@ class WebRTCManagerPeer {
     }
   }
 
-
-  void _safeStopTrack(MediaStreamTrack track) {
-    try {
-      track.stop();
-    } catch (e) {
-      debugPrint('❌ Error stopping track ${track.id}: $e');
-    }
-  }
-
-// Di WebRTCManager, buat method switchCamera yang lebih aggressive:
-
-  Future<void> switchCamera() async {
+  Future<void> toggleSwitchCamera() async {
     if (_localStream == null || _isProcessing || _isDisposed) return;
-
     _isProcessing = true;
     try {
       _currentCamera = _currentCamera == 'user' ? 'environment' : 'user';
-
       debugPrint('🔄 Switching camera to: $_currentCamera');
 
-      // **SOLUSI RADICAL: Buat LOCAL STREAM BARU sepenuhnya**
+      // BUAR LOCAL STREAM BARU
       await _createNewLocalStream();
 
       debugPrint('✅ Camera switched successfully to: $_currentCamera');
@@ -885,29 +708,50 @@ class WebRTCManagerPeer {
       _isProcessing = false;
     }
   }
-  String get currentCamera => _currentCamera;
 
   Future<void> _createNewLocalStream() async {
     try {
       debugPrint('🎥 Creating COMPLETELY NEW local stream...');
 
+      // final mediaConstraints = {
+      //   'audio': {
+      //     'echoCancellation': true,
+      //     'noiseSuppression': true,
+      //   },
+      //   'video': {
+      //     'width': {'ideal': 640},
+      //     'height': {'ideal': 480},
+      //     'frameRate': {'ideal': 30},
+      //     'facingMode': _currentCamera,
+      //   }
+      // };
+
       final mediaConstraints = {
         'audio': {
           'echoCancellation': true,
           'noiseSuppression': true,
+          'autoGainControl': true,
+          'googEchoCancellation': true,
+          'googAutoGainControl': true,
+          'googNoiseSuppression': true,
+          'googHighpassFilter': true,
         },
         'video': {
-          'width': {'ideal': 640},
-          'height': {'ideal': 480},
-          'frameRate': {'ideal': 30},
-          'facingMode': _currentCamera,
+          'width': {'ideal': 640, 'max': 1280},
+          'height': {'ideal': 480, 'max': 720},
+          'frameRate': {'ideal': 30, 'max': 60}, // Reduce dari 60 ke 30
+          'facingMode': 'user',
+
+          // TAMBAHKAN: Advanced constraints untuk stability
+          'deviceId': 'default',
+          'groupId': 'default',
         }
       };
 
-      // **BUAT STREAM BARU SEPENUHNYA**
+      // BUAT STREAM BARU
       final newLocalStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
 
-      // **PERBAIKAN: APPLY MUTE STATE KE STREAM BARU**
+      // APPLY MUTE STATE KE STREAM BARU
       if (_isMuted) {
         final audioTracks = newLocalStream.getAudioTracks();
         for (final track in audioTracks) {
@@ -916,14 +760,14 @@ class WebRTCManagerPeer {
         debugPrint('🔇 Applied mute state to new stream');
       }
 
-      // **STOP DAN REPLACE LOCAL STREAM LAMA**
+      // STOP DAN REPLACE LOCAL STREAM LAMA
       if (_localStream != null) {
         _localStream!.getTracks().forEach((track) => track.stop());
       }
 
       _localStream = newLocalStream;
 
-      // **REPLACE TRACKS DI SEMUA PEER CONNECTIONS**
+      // REPLACE TRACKS DI SEMUA PEER CONNECTIONS
       for (final entry in _peerConnections.entries) {
         final peerId = entry.key;
         final pc = entry.value;
@@ -952,98 +796,24 @@ class WebRTCManagerPeer {
             }
           }
         }
-
         debugPrint('✅ Replaced tracks for peer: $peerId');
       }
 
-      // **NOTIFY UI TENTANG STREAM BARU**
+      // NOTIFY UI TENTANG STREAM BARU
       _safeCallback(() => onLocalStream?.call(_localStream!));
-
       debugPrint('✅ Completely new local stream created and applied (mute: $_isMuted)');
-
     } catch (e) {
       debugPrint('❌ Error creating new local stream: $e');
       rethrow;
     }
   }
 
-  // Manual control methods untuk debugging
-  Future<void> createOfferManually() async {
-    debugPrint('🎯 MANUAL OFFER CREATION TRIGGERED');
-
-    for (final peerId in _peerConnections.keys) {
-      await _createOfferToPeer(peerId);
+  void _safeCallback(Function() callback) {
+    if (!_isDisposed) {
+      callback();
     }
   }
-
-  Future<void> reconnect() async {
-    if (_isDisposed) return;
-
-    debugPrint('🔄 Attempting to reconnect...');
-
-    try {
-      // Cleanup existing connections
-      for (final peerId in _peerConnections.keys.toList()) {
-        _cleanupPeer(peerId);
-      }
-
-      // Re-initialize media
-      await _getUserMedia();
-
-      debugPrint('✅ Reconnection completed');
-    } catch (e) {
-      debugPrint('❌ Reconnection failed: $e');
-    }
-  }
-
-  Future<void> retryConnections() async {
-    if (_isDisposed) return;
-
-    debugPrint('🔄 MANUAL RETRY - Recreating all peer connections');
-
-    // Cleanup existing connections
-    for (final peerId in _peerConnections.keys.toList()) {
-      _cleanupPeer(peerId);
-    }
-
-    // Re-create connections setelah delay
-    Future.delayed(const Duration(seconds: 1), () {
-      if (!_isDisposed && socket.connected) {
-        debugPrint('🔄 Requesting peers list from server...');
-        socket.emit('session', {
-          'roomId': roomId,
-          'data': {'type': 'query'},
-        });
-      }
-    });
-  }
-
-  void checkConnectionStatus() {
-    debugPrint('🔍 CONNECTION STATUS CHECK:');
-    debugPrint('   - Socket connected: ${socket.connected}');
-    debugPrint('   - Self ID: $selfId');
-    debugPrint('   - Room ID: $roomId');
-    debugPrint('   - Local stream: ${_localStream != null}');
-    debugPrint('   - Peer connections: ${_peerConnections.length}');
-    debugPrint('   - Remote renderers: ${_remoteRenderers.length}');
-
-    for (final entry in _peerConnections.entries) {
-      debugPrint('   - Peer ${entry.key}:');
-      debugPrint('     - Signaling state: ${entry.value.signalingState}');
-      debugPrint('     - ICE connection state: ${entry.value.iceConnectionState}');
-      debugPrint('     - Connection state: ${entry.value.connectionState}');
-    }
-  }
-
-  // Getters
-  MediaStream? get localStream => _localStream;
-  Map<String, RTCVideoRenderer> get remoteRenderers => _remoteRenderers;
-  bool get isMuted => _isMuted;
-  bool get isCameraOn => _isCameraOn;
-  String? get currentRoomId => roomId;
-  String? get currentUserId => selfId;
-
-  // Cleanup
+  
   Future<void> disconnect() async {
     if (_isDisposed) return;
 
@@ -1084,8 +854,44 @@ class WebRTCManagerPeer {
     }
   }
 
-  @override
-  void dispose() {
-    disconnect();
+  void _cleanupPeer(String peerId) {
+    final pc = _peerConnections[peerId];
+    if (pc != null) {
+      pc.close();
+      _peerConnections.remove(peerId);
+    }
+
+    final renderer = _remoteRenderers[peerId];
+    if (renderer != null) {
+      renderer.dispose();
+      _remoteRenderers.remove(peerId);
+    }
+
+    debugPrint('✅ Cleaned up peer: $peerId');
   }
+
+  void _logSignalDetails(dynamic data) {
+    final from = data['from'];
+    final signalData = data['data'];
+    final type = signalData['type'];
+
+    debugPrint('''
+📨 SIGNAL EVENT DETAILS:
+   - From: $from
+   - Type: $type
+   - Room: $roomId
+   - Self: $selfId
+   - Timestamp: ${DateTime.now().toIso8601String()}
+   - Peer Connections: ${_peerConnections.length}
+   - Remote Renderers: ${_remoteRenderers.length}
+''');
+
+    if (type == 'offer' || type == 'answer') {
+      final sdp = signalData['sdp'];
+      if (sdp is String) {
+        debugPrint('   - SDP Preview: ${sdp.substring(0, 100)}...');
+      }
+    }
+  }
+
 }

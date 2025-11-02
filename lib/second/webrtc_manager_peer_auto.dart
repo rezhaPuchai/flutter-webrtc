@@ -1,8 +1,9 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 
 class WebRTCManagerPeerAuto {
-  late IO.Socket socket;
+  late io.Socket socket;
   String? selfId;
   String? roomId;
 
@@ -33,7 +34,7 @@ class WebRTCManagerPeerAuto {
     this.roomId = roomId;
 
     try {
-      print('🚀 Connecting to room: $roomId');
+      debugPrint('🚀 Connecting to room: $roomId');
 
       // Reset state untuk new connection
       _isFullyInitialized = false;
@@ -42,7 +43,7 @@ class WebRTCManagerPeerAuto {
       _setupSocketConnection(signalingUrl, roomId);
 
     } catch (e) {
-      print('❌ Error connecting: $e');
+      debugPrint('❌ Error connecting: $e');
       _safeCallback(() => onError?.call('Failed to connect: $e'));
     }
   }
@@ -50,11 +51,11 @@ class WebRTCManagerPeerAuto {
   void _setupSocketConnection(String signalingUrl, String roomId) {
     if (_isDisposed) return;
 
-    print('🔄 Setting up socket connection to: $signalingUrl');
+    debugPrint('🔄 Setting up socket connection to: $signalingUrl');
 
-    socket = IO.io(
+    socket = io.io(
       signalingUrl,
-      IO.OptionBuilder()
+      io.OptionBuilder()
           .setTransports(['websocket'])
           .disableAutoConnect()
           .build(),
@@ -65,10 +66,10 @@ class WebRTCManagerPeerAuto {
     socket.onConnect((_) {
       if (_isDisposed) return;
       selfId = socket.id;
-      print('✅ SOCKET CONNECTED: $selfId to room: $roomId');
+      debugPrint('✅ SOCKET CONNECTED: $selfId to room: $roomId');
 
       // Join room
-      print('📤 EMITTING join event: $roomId');
+      debugPrint('📤 EMITTING join event: $roomId');
       socket.emit('join', roomId);
 
       _safeCallback(() => onConnected?.call());
@@ -78,40 +79,40 @@ class WebRTCManagerPeerAuto {
     });
 
     socket.onDisconnect((_) {
-      print('❌ SOCKET DISCONNECTED');
+      debugPrint('❌ SOCKET DISCONNECTED');
       _isFullyInitialized = false;
     });
 
     socket.onError((error) {
-      print('❌ SOCKET ERROR: $error');
+      debugPrint('❌ SOCKET ERROR: $error');
       _safeCallback(() => onError?.call('Socket error: $error'));
     });
 
     // Event handlers
     socket.on('peers', (data) {
-      print('👥 PEERS EVENT: $data');
+      debugPrint('👥 PEERS EVENT: $data');
       _handlePeersEvent(data);
     });
 
     socket.on('signal', (data) {
-      print('📨 SIGNAL EVENT: $data');
+      debugPrint('📨 SIGNAL EVENT: $data');
       _handleSignalEvent(data);
     });
 
     socket.on('user-joined', (data) {
-      print('🟢 USER JOINED: $data');
+      debugPrint('🟢 USER JOINED: $data');
       _handleUserJoined(data);
     });
 
     socket.on('user-left', (data) {
-      print('🔴 USER LEFT: $data');
+      debugPrint('🔴 USER LEFT: $data');
       _handleUserLeft(data);
     });
 
     // Debug events
     socket.onAny((event, data) {
       if (event != 'signal') {
-        print('📡 [ALL EVENTS] $event: $data');
+        debugPrint('📡 [ALL EVENTS] $event: $data');
       }
     });
   }
@@ -124,17 +125,17 @@ class WebRTCManagerPeerAuto {
     final signalData = data['data'];
     final type = signalData['type'];
 
-    print('🎯 Handling signal from $from - type: $type');
+    debugPrint('🎯 Handling signal from $from - type: $type');
 
     // Jika belum ada peer connection, buat dulu
     if (!_peerConnections.containsKey(from)) {
-      print('🆕 Creating peer connection for signal from: $from');
+      debugPrint('🆕 Creating peer connection for signal from: $from');
       await _createPeerConnection(from);
     }
 
     final pc = _peerConnections[from];
     if (pc == null) {
-      print('❌ Failed to create peer connection for: $from');
+      debugPrint('❌ Failed to create peer connection for: $from');
       return;
     }
 
@@ -150,10 +151,10 @@ class WebRTCManagerPeerAuto {
           await _handleRemoteCandidate(pc, signalData);
           break;
         default:
-          print('❌ Unknown signal type: $type');
+          debugPrint('❌ Unknown signal type: $type');
       }
     } catch (e) {
-      print('❌ Error handling signal: $e');
+      debugPrint('❌ Error handling signal: $e');
     }
   }
 
@@ -162,7 +163,7 @@ class WebRTCManagerPeerAuto {
     if (_isDisposed) return;
 
     final peerId = data['userId'];
-    print('🔴 Cleaning up peer: $peerId');
+    debugPrint('🔴 Cleaning up peer: $peerId');
 
     _cleanupPeer(peerId);
     _safeCallback(() => onPeerDisconnected?.call(peerId));
@@ -171,7 +172,7 @@ class WebRTCManagerPeerAuto {
   // **TAMBAHKAN: Method yang missing**
   Future<void> _handleRemoteOffer(RTCPeerConnection pc, String from, dynamic offerData) async {
     try {
-      print('📨 Handling offer from $from');
+      debugPrint('📨 Handling offer from $from');
 
       await pc.setRemoteDescription(
         RTCSessionDescription(offerData['sdp'], offerData['type']),
@@ -191,31 +192,31 @@ class WebRTCManagerPeerAuto {
         }
       });
 
-      print('✅ Answer sent to $from');
+      debugPrint('✅ Answer sent to $from');
     } catch (e) {
-      print('❌ Error handling remote offer from $from: $e');
+      debugPrint('❌ Error handling remote offer from $from: $e');
     }
   }
 
   // **TAMBAHKAN: Method yang missing**
   Future<void> _handleRemoteAnswer(RTCPeerConnection pc, dynamic answerData) async {
     try {
-      print('📨 Handling answer from peer');
+      debugPrint('📨 Handling answer from peer');
 
       await pc.setRemoteDescription(
         RTCSessionDescription(answerData['sdp'], answerData['type']),
       );
 
-      print('✅ Answer processed');
+      debugPrint('✅ Answer processed');
     } catch (e) {
-      print('❌ Error handling remote answer: $e');
+      debugPrint('❌ Error handling remote answer: $e');
     }
   }
 
   // **TAMBAHKAN: Method yang missing**
   Future<void> _handleRemoteCandidate(RTCPeerConnection pc, dynamic candidateData) async {
     try {
-      print('🧊 Handling ICE candidate from peer');
+      debugPrint('🧊 Handling ICE candidate from peer');
 
       final candidate = candidateData['candidate'];
       await pc.addCandidate(RTCIceCandidate(
@@ -224,15 +225,15 @@ class WebRTCManagerPeerAuto {
         candidate['sdpMLineIndex'],
       ));
 
-      print('✅ ICE candidate added');
+      debugPrint('✅ ICE candidate added');
     } catch (e) {
-      print('❌ Error handling ICE candidate: $e');
+      debugPrint('❌ Error handling ICE candidate: $e');
     }
   }
 
   Future<void> _initializeMediaAndPeerConnection() async {
     try {
-      print('🎯 INITIALIZATION SEQUENCE STARTED');
+      debugPrint('🎯 INITIALIZATION SEQUENCE STARTED');
 
       // Step 1: Get user media
       await _getUserMedia();
@@ -242,12 +243,12 @@ class WebRTCManagerPeerAuto {
 
       // Step 3: Mark as fully initialized
       _isFullyInitialized = true;
-      print('✅ FULLY INITIALIZED - Ready for WebRTC connections');
+      debugPrint('✅ FULLY INITIALIZED - Ready for WebRTC connections');
 
       _safeCallback(() => onReadyForOffers?.call());
 
     } catch (e) {
-      print('❌ Initialization sequence failed: $e');
+      debugPrint('❌ Initialization sequence failed: $e');
       _safeCallback(() => onError?.call('Initialization failed: $e'));
     }
   }
@@ -270,11 +271,11 @@ class WebRTCManagerPeerAuto {
 
     try {
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-      print('✅ Got local media stream with ${_localStream!.getTracks().length} tracks');
+      debugPrint('✅ Got local media stream with ${_localStream!.getTracks().length} tracks');
 
       _safeCallback(() => onLocalStream?.call(_localStream!));
     } catch (e) {
-      print('❌ Error getting user media: $e');
+      debugPrint('❌ Error getting user media: $e');
       rethrow;
     }
   }
@@ -283,7 +284,7 @@ class WebRTCManagerPeerAuto {
     if (_isDisposed) return;
 
     try {
-      print('🔗 Initializing main peer connection configuration');
+      debugPrint('🔗 Initializing main peer connection configuration');
 
       final configuration = {
         'iceServers': [
@@ -296,10 +297,10 @@ class WebRTCManagerPeerAuto {
       final testPc = await createPeerConnection(configuration);
       await testPc.close();
 
-      print('✅ WebRTC peer connection test successful');
+      debugPrint('✅ WebRTC peer connection test successful');
 
     } catch (e) {
-      print('❌ Error initializing main peer connection: $e');
+      debugPrint('❌ Error initializing main peer connection: $e');
       rethrow;
     }
   }
@@ -307,11 +308,11 @@ class WebRTCManagerPeerAuto {
   void _handlePeersEvent(dynamic peerIds) {
     if (_isDisposed || _localStream == null) return;
 
-    print('🎯 Handling peers: $peerIds');
+    debugPrint('🎯 Handling peers: $peerIds');
 
     if (!_isFullyInitialized) {
-      print('⏳ Not fully initialized yet, delaying peer connection...');
-      Future.delayed(Duration(seconds: 1), () {
+      debugPrint('⏳ Not fully initialized yet, delaying peer connection...');
+      Future.delayed(const Duration(seconds: 1), () {
         if (!_isDisposed && _isFullyInitialized) {
           _handlePeersEvent(peerIds);
         }
@@ -322,7 +323,7 @@ class WebRTCManagerPeerAuto {
     if (peerIds is List) {
       for (final peerId in peerIds) {
         if (peerId is String && peerId != selfId && !_peerConnections.containsKey(peerId)) {
-          print('🔗 Creating peer connection to: $peerId');
+          debugPrint('🔗 Creating peer connection to: $peerId');
           _createPeerConnection(peerId);
         }
       }
@@ -335,8 +336,8 @@ class WebRTCManagerPeerAuto {
     final peerId = data['userId'];
 
     if (!_isFullyInitialized) {
-      print('⏳ Not fully initialized yet, delaying user joined handling...');
-      Future.delayed(Duration(seconds: 1), () {
+      debugPrint('⏳ Not fully initialized yet, delaying user joined handling...');
+      Future.delayed(const Duration(seconds: 1), () {
         if (!_isDisposed && _isFullyInitialized) {
           _handleUserJoined(data);
         }
@@ -345,7 +346,7 @@ class WebRTCManagerPeerAuto {
     }
 
     if (peerId != selfId && !_peerConnections.containsKey(peerId)) {
-      print('🔗 User joined, creating peer connection to: $peerId');
+      debugPrint('🔗 User joined, creating peer connection to: $peerId');
       _createPeerConnection(peerId);
     }
   }
@@ -354,7 +355,7 @@ class WebRTCManagerPeerAuto {
     if (_isDisposed || _localStream == null) return;
 
     try {
-      print('🔗 Creating peer connection for: $peerId');
+      debugPrint('🔗 Creating peer connection for: $peerId');
 
       final configuration = {
         'iceServers': [
@@ -369,7 +370,7 @@ class WebRTCManagerPeerAuto {
       // Setup event handlers
       pc.onIceCandidate = (RTCIceCandidate candidate) {
         if (_isDisposed) return;
-        print('🧊 ICE Candidate to $peerId: ${candidate.candidate}');
+        debugPrint('🧊 ICE Candidate to $peerId: ${candidate.candidate}');
 
         socket.emit('signal', {
           'roomId': roomId,
@@ -387,13 +388,13 @@ class WebRTCManagerPeerAuto {
 
       pc.onAddStream = (MediaStream stream) {
         if (_isDisposed) return;
-        print('🎬 Remote stream added from $peerId: ${stream.id}');
+        debugPrint('🎬 Remote stream added from $peerId: ${stream.id}');
         _addRemoteStream(peerId, stream);
       };
 
       pc.onTrack = (RTCTrackEvent event) {
         if (_isDisposed) return;
-        print('🎬 Remote track added from $peerId: ${event.track?.kind}');
+        debugPrint('🎬 Remote track added from $peerId: ${event.track.kind}');
         if (event.streams.isNotEmpty) {
           final stream = event.streams.first;
           _addRemoteStream(peerId, stream);
@@ -401,48 +402,48 @@ class WebRTCManagerPeerAuto {
       };
 
       pc.onConnectionState = (RTCPeerConnectionState state) {
-        print('🔗 Connection state with $peerId: $state');
+        debugPrint('🔗 Connection state with $peerId: $state');
       };
 
       // Add local tracks
-      print('⏳ Adding local tracks to peer connection...');
-      await Future.delayed(Duration(milliseconds: 100));
+      debugPrint('⏳ Adding local tracks to peer connection...');
+      await Future.delayed(const Duration(milliseconds: 100));
 
       _localStream!.getTracks().forEach((track) {
         pc.addTrack(track, _localStream!);
       });
 
-      print('✅ Peer connection created for: $peerId');
+      debugPrint('✅ Peer connection created for: $peerId');
 
       // Tunggu lebih lama sebelum create offer
-      print('⏳ Waiting before creating offer...');
-      await Future.delayed(Duration(milliseconds: 800));
+      debugPrint('⏳ Waiting before creating offer...');
+      await Future.delayed(const Duration(milliseconds: 800));
 
       if (!_isDisposed && _peerConnections.containsKey(peerId)) {
-        print('🚀 Creating offer to: $peerId');
+        debugPrint('🚀 Creating offer to: $peerId');
         await _createOfferToPeer(peerId);
       }
 
     } catch (e) {
-      print('❌ Error creating peer connection: $e');
+      debugPrint('❌ Error creating peer connection: $e');
     }
   }
 
   Future<void> _createOfferToPeer(String peerId) async {
     final pc = _peerConnections[peerId];
     if (pc == null) {
-      print('❌ No peer connection for: $peerId');
+      debugPrint('❌ No peer connection for: $peerId');
       return;
     }
 
     // Cek state untuk avoid multiple simultaneous offers
     if (pc.signalingState == RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
-      print('⚠️ Already have local offer for $peerId, skipping');
+      debugPrint('⚠️ Already have local offer for $peerId, skipping');
       return;
     }
 
     try {
-      print('📤 Creating offer to: $peerId');
+      debugPrint('📤 Creating offer to: $peerId');
 
       final offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -458,14 +459,14 @@ class WebRTCManagerPeerAuto {
         }
       });
 
-      print('✅ Offer sent to: $peerId');
+      debugPrint('✅ Offer sent to: $peerId');
 
     } catch (e) {
-      print('❌ Error creating offer to $peerId: $e');
+      debugPrint('❌ Error creating offer to $peerId: $e');
 
       // Retry setelah delay jika gagal
-      print('🔄 Retrying offer creation in 1 second...');
-      Future.delayed(Duration(seconds: 1), () {
+      debugPrint('🔄 Retrying offer creation in 1 second...');
+      Future.delayed(const Duration(seconds: 1), () {
         if (!_isDisposed && _peerConnections.containsKey(peerId)) {
           _createOfferToPeer(peerId);
         }
@@ -476,12 +477,12 @@ class WebRTCManagerPeerAuto {
   void _addRemoteStream(String peerId, MediaStream stream) {
     if (_isDisposed) return;
 
-    print('📹 Adding remote stream from $peerId with ${stream.getTracks().length} tracks');
+    debugPrint('📹 Adding remote stream from $peerId with ${stream.getTracks().length} tracks');
 
     if (_remoteRenderers.containsKey(peerId)) {
       final existingRenderer = _remoteRenderers[peerId];
       existingRenderer?.srcObject = stream;
-      print('✅ Updated existing renderer for: $peerId');
+      debugPrint('✅ Updated existing renderer for: $peerId');
       return;
     }
 
@@ -497,9 +498,9 @@ class WebRTCManagerPeerAuto {
       _remoteRenderers[peerId] = renderer;
 
       _safeCallback(() => onRemoteStream?.call(peerId, stream));
-      print('✅ New remote renderer created for: $peerId');
+      debugPrint('✅ New remote renderer created for: $peerId');
     }).catchError((e) {
-      print('❌ Error initializing remote renderer: $e');
+      debugPrint('❌ Error initializing remote renderer: $e');
     });
   }
 
@@ -508,14 +509,14 @@ class WebRTCManagerPeerAuto {
     if (pc != null) {
       pc.close();
       _peerConnections.remove(peerId);
-      print('✅ Closed peer connection: $peerId');
+      debugPrint('✅ Closed peer connection: $peerId');
     }
 
     final renderer = _remoteRenderers[peerId];
     if (renderer != null) {
       renderer.dispose();
       _remoteRenderers.remove(peerId);
-      print('✅ Disposed renderer: $peerId');
+      debugPrint('✅ Disposed renderer: $peerId');
     }
   }
 
@@ -541,10 +542,10 @@ class WebRTCManagerPeerAuto {
           track.enabled = !_isMuted;
         }
 
-        print('🎤 Audio ${_isMuted ? 'muted' : 'unmuted'}');
+        debugPrint('🎤 Audio ${_isMuted ? 'muted' : 'unmuted'}');
       }
     } catch (e) {
-      print('❌ Error toggling mute: $e');
+      debugPrint('❌ Error toggling mute: $e');
       _isMuted = !_isMuted;
     } finally {
       _isProcessing = false;
@@ -564,9 +565,9 @@ class WebRTCManagerPeerAuto {
         await _disableCamera();
       }
 
-      print('📷 Camera ${_isCameraOn ? 'enabled' : 'disabled'}');
+      debugPrint('📷 Camera ${_isCameraOn ? 'enabled' : 'disabled'}');
     } catch (e) {
-      print('❌ Error toggling camera: $e');
+      debugPrint('❌ Error toggling camera: $e');
       _isCameraOn = !_isCameraOn;
     } finally {
       _isProcessing = false;
@@ -608,7 +609,7 @@ class WebRTCManagerPeerAuto {
         }
       });
     } catch (e) {
-      print('❌ Error enabling camera: $e');
+      debugPrint('❌ Error enabling camera: $e');
       rethrow;
     }
   }
@@ -625,7 +626,7 @@ class WebRTCManagerPeerAuto {
 
       _safeCallback(() => onLocalStream?.call(_localStream!));
     } catch (e) {
-      print('❌ Error disabling camera: $e');
+      debugPrint('❌ Error disabling camera: $e');
       rethrow;
     }
   }
@@ -639,7 +640,7 @@ class WebRTCManagerPeerAuto {
         _safeStopTrack(track);
       }
     } catch (e) {
-      print('❌ Error disabling current video tracks: $e');
+      debugPrint('❌ Error disabling current video tracks: $e');
     }
   }
 
@@ -647,7 +648,7 @@ class WebRTCManagerPeerAuto {
     try {
       track.stop();
     } catch (e) {
-      print('❌ Error stopping track ${track.id}: $e');
+      debugPrint('❌ Error stopping track ${track.id}: $e');
     }
   }
 
@@ -658,9 +659,9 @@ class WebRTCManagerPeerAuto {
     try {
       _currentCamera = _currentCamera == 'user' ? 'environment' : 'user';
       await _enableCamera();
-      print('🔄 Switched camera to: $_currentCamera');
+      debugPrint('🔄 Switched camera to: $_currentCamera');
     } catch (e) {
-      print('❌ Error switching camera: $e');
+      debugPrint('❌ Error switching camera: $e');
       _currentCamera = _currentCamera == 'user' ? 'environment' : 'user';
     } finally {
       _isProcessing = false;
@@ -669,7 +670,7 @@ class WebRTCManagerPeerAuto {
 
   // Manual control methods
   Future<void> createOfferManually() async {
-    print('🎯 MANUAL OFFER CREATION TRIGGERED');
+    debugPrint('🎯 MANUAL OFFER CREATION TRIGGERED');
 
     for (final peerId in _peerConnections.keys) {
       await _createOfferToPeer(peerId);
@@ -679,7 +680,7 @@ class WebRTCManagerPeerAuto {
   Future<void> reconnect() async {
     if (_isDisposed) return;
 
-    print('🔄 Attempting to reconnect...');
+    debugPrint('🔄 Attempting to reconnect...');
 
     try {
       for (final peerId in _peerConnections.keys.toList()) {
@@ -688,16 +689,16 @@ class WebRTCManagerPeerAuto {
 
       await _getUserMedia();
 
-      print('✅ Reconnection completed');
+      debugPrint('✅ Reconnection completed');
     } catch (e) {
-      print('❌ Reconnection failed: $e');
+      debugPrint('❌ Reconnection failed: $e');
     }
   }
 
   Future<void> retryConnections() async {
     if (_isDisposed) return;
 
-    print('🔄 MANUAL RETRY - Recreating all peer connections');
+    debugPrint('🔄 MANUAL RETRY - Recreating all peer connections');
 
     // Cleanup existing connections
     for (final peerId in _peerConnections.keys.toList()) {
@@ -705,9 +706,9 @@ class WebRTCManagerPeerAuto {
     }
 
     // Re-create connections setelah delay
-    Future.delayed(Duration(seconds: 1), () {
+    Future.delayed(const Duration(seconds: 1), () {
       if (!_isDisposed && socket.connected) {
-        print('🔄 Requesting peers list from server...');
+        debugPrint('🔄 Requesting peers list from server...');
         socket.emit('session', {
           'roomId': roomId,
           'data': {'type': 'query'},
@@ -717,20 +718,20 @@ class WebRTCManagerPeerAuto {
   }
 
   void checkConnectionStatus() {
-    print('🔍 CONNECTION STATUS CHECK:');
-    print('   - Socket connected: ${socket.connected}');
-    print('   - Self ID: $selfId');
-    print('   - Room ID: $roomId');
-    print('   - Local stream: ${_localStream != null}');
-    print('   - Fully initialized: $_isFullyInitialized');
-    print('   - Peer connections: ${_peerConnections.length}');
-    print('   - Remote renderers: ${_remoteRenderers.length}');
+    debugPrint('🔍 CONNECTION STATUS CHECK:');
+    debugPrint('   - Socket connected: ${socket.connected}');
+    debugPrint('   - Self ID: $selfId');
+    debugPrint('   - Room ID: $roomId');
+    debugPrint('   - Local stream: ${_localStream != null}');
+    debugPrint('   - Fully initialized: $_isFullyInitialized');
+    debugPrint('   - Peer connections: ${_peerConnections.length}');
+    debugPrint('   - Remote renderers: ${_remoteRenderers.length}');
 
     for (final entry in _peerConnections.entries) {
-      print('   - Peer ${entry.key}:');
-      print('     - Signaling state: ${entry.value.signalingState}');
-      print('     - ICE connection state: ${entry.value.iceConnectionState}');
-      print('     - Connection state: ${entry.value.connectionState}');
+      debugPrint('   - Peer ${entry.key}:');
+      debugPrint('     - Signaling state: ${entry.value.signalingState}');
+      debugPrint('     - ICE connection state: ${entry.value.iceConnectionState}');
+      debugPrint('     - Connection state: ${entry.value.connectionState}');
     }
   }
 
@@ -750,7 +751,7 @@ class WebRTCManagerPeerAuto {
     _isFullyInitialized = false;
 
     try {
-      print('🔌 Disconnecting...');
+      debugPrint('🔌 Disconnecting...');
 
       if (socket.connected) {
         socket.emit('leave', roomId);
@@ -774,9 +775,9 @@ class WebRTCManagerPeerAuto {
         _localStream = null;
       }
 
-      print('✅ Disconnected from WebRTC session');
+      debugPrint('✅ Disconnected from WebRTC session');
     } catch (e) {
-      print('❌ Error during disconnect: $e');
+      debugPrint('❌ Error during disconnect: $e');
     }
   }
 

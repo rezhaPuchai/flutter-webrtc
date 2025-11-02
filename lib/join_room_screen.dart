@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'conference_screen.dart';
 
 class JoinRoomScreen extends StatefulWidget {
-  const JoinRoomScreen({Key? key}) : super(key: key);
+  const JoinRoomScreen({super.key});
 
   @override
   _JoinRoomScreenState createState() => _JoinRoomScreenState();

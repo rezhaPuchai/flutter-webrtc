@@ -1,12 +1,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:socket_io_client/socket_io_client.dart';
 import 'package:test_web_rtc/second/permission_service.dart';
+import 'package:test_web_rtc/second/ios-simulator/simulator_ios_permission_service.dart';
 import 'package:test_web_rtc/second/video_call_screen.dart';
+import 'package:test_web_rtc/second/ios-simulator/video_call_simulator_ios_screen.dart';
 import 'package:uuid/uuid.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -15,15 +16,13 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-
 class _HomePageState extends State<HomePage> {
   final TextEditingController _roomCtrl = TextEditingController(text: '8uw9s87s');
   final TextEditingController _nameCtrl = TextEditingController(text: 'user-${const Uuid().v4().substring(0, 6)}');
 
-  late IO.Socket socket;
+  late io.Socket socket;
   String? selfId;
-  final Map<String, dynamic> peers = {}; // mirip peersRef.current di JS
-
+  final Map<String, dynamic> peers = {};
 
   Future<MediaStream> getUserMedia() async {
     final mediaConstraints = {
@@ -58,7 +57,31 @@ class _HomePageState extends State<HomePage> {
               controller: _nameCtrl,
               decoration: const InputDecoration(labelText: 'Display name (any string)'),
             ),
-            const Spacer(),
+            const SizedBox(height: 30),
+            SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () async {
+                    final bool hasPermission = await SimulatorIosPermissionService.requestVideoCallPermissions(context);
+
+                    if (hasPermission) {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => VideoCallSimulatorIosScreen(roomId: _roomCtrl.text.trim()),
+                      ));
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Cannot proceed to simulator mode'),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.smartphone),
+                  label: const Text('Join Video Call (iOS Simulator)'),
+                )
+            ),
+            const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -99,18 +122,18 @@ class _HomePageState extends State<HomePage> {
                 icon: const Icon(Icons.video_call),
                 label: const Text('Join Video Call'),
               )
-            )
+            ),
+            const Spacer(),
           ],
         ),
       ),
     );
   }
 
-
   void connect(String signalingUrl, String roomId, dynamic stream) {
-    socket = IO.io(
+    socket = io.io(
       signalingUrl,
-      IO.OptionBuilder()
+      io.OptionBuilder()
           .setTransports(['websocket'])
           .disableAutoConnect() // optional
           .build(),
@@ -121,7 +144,7 @@ class _HomePageState extends State<HomePage> {
     // Saat tersambung
     socket.onConnect((_) {
       selfId = socket.id;
-      print('Connected: $selfId');
+      debugPrint('Connected: $selfId');
 
       // Emit join dan session seperti di JS
       socket.emit('join', roomId);
@@ -134,7 +157,7 @@ class _HomePageState extends State<HomePage> {
 
   void createPeer(String peerId, bool polite, dynamic stream) {
     // Implementasi mirip JS (buat RTCPeerConnection)
-    print('Creating peer for $peerId (polite: $polite)');
+    debugPrint('Creating peer for $peerId (polite: $polite)');
     peers[peerId] = {'polite': polite, 'stream': stream};
     // TODO: tambahkan logika WebRTC (menggunakan flutter_webrtc)
   }

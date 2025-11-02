@@ -1,91 +1,92 @@
-
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:test_web_rtc/second/webrtc_manager_peer.dart';
+import 'package:test_web_rtc/learn-rtc/rtc_manager.dart';
 
-class VideoCallScreen extends StatefulWidget {
+class RoomPage extends StatefulWidget {
   final String roomId;
 
-  const VideoCallScreen({super.key, required this.roomId});
+  const RoomPage({super.key, required this.roomId});
 
   @override
-  _VideoCallScreenState createState() => _VideoCallScreenState();
+  State<RoomPage> createState() => _RoomPageState();
 }
 
-class _VideoCallScreenState extends State<VideoCallScreen> {
-  // final WebRTCManagerPeerAuto _webRTCManager = WebRTCManagerPeerAuto();
-  final WebRTCManagerPeer _webRTCManager = WebRTCManagerPeer();
+class _RoomPageState extends State<RoomPage> {
+  final RtcManager _webRTCManager = RtcManager();
+  
   MediaStream? _localStream;
+  
   RTCVideoRenderer? _localRenderer;
+  RTCVideoRenderer? _localRendererAlt;
 
   final Map<String, RTCVideoRenderer> _remoteRenderers = {};
+
   bool _isConnected = false;
   bool _isDisposed = false;
+  bool _showControls = true;
+  bool _permissionsChecked = false;
 
-  // **TAMBAHKAN: Variabel untuk draggable local video**
-  Offset _localVideoPosition = const Offset(20, 100);
+  Offset _localVideoPosition = const Offset(30, 100);
   bool _isDragging = false;
 
-  // **TAMBAHKAN: State untuk controls visibility**
-  bool _showControls = true;
-
-  // **TAMBAHKAN VARIABLE** di _VideoCallScreenState
-  RTCVideoRenderer? _localRendererAlt;
-  bool _useAltRenderer = false;
-
-  bool _permissionsChecked = false;
+  double wLocalVideo = 150;
+  double hLocalVideo = 220;
+  bool isDefaultSizeLocalVideo = true;
 
 
   @override
   void initState() {
-    super.initState();
-    debugPrint('🚀 Initializing VideoCallScreen for room: ${widget.roomId}');
-    // _initializeLocalRenderer();
-    // _initializeWebRTC();
+    debugPrint('PAGE: 🚀 Room ID: ${widget.roomId}');
     _initializeWithPermissions();
-
+    super.initState();
   }
 
-  // **TAMBAHKAN: Method untuk toggle controls visibility**
-  void _toggleControls() {
-    setState(() {
-      _showControls = !_showControls;
-    });
+  @override
+  void dispose() {
+    debugPrint('PAGE: 🧹 Disposing RoomPage...');
+    _isDisposed = true;
+
+    // Dispose all local renderers
+    _localRenderer?.dispose();
+    _localRendererAlt?.dispose();
+
+    for (final renderer in _remoteRenderers.values) {
+      renderer.dispose();
+    }
+    _remoteRenderers.clear();
+
+    _webRTCManager.disconnect();
+
+    super.dispose();
+    debugPrint('PAGE: ✅ RoomPage disposed');
   }
 
   Future<void> _initializeWithPermissions() async {
     try {
-      // Step 1: Initialize renderers first (aman tanpa permission)
       await _initializeLocalRenderer();
-      debugPrint('✅ Local renderer initialized');
 
-      // Step 2: Check and request permissions if needed
       final cameraStatus = await Permission.camera.status;
       final micStatus = await Permission.microphone.status;
 
-      debugPrint('📊 Permission status - Camera: $cameraStatus, Mic: $micStatus');
+      debugPrint('PAGE: 📊 Permission status - Camera: $cameraStatus, Mic: $micStatus');
 
       if (!cameraStatus.isGranted || !micStatus.isGranted) {
-        debugPrint('🔄 Requesting permissions...');
+        debugPrint('PAGE: 🔄 Requesting permissions...');
         final statuses = await [Permission.camera, Permission.microphone].request();
 
         if (statuses[Permission.camera]?.isGranted == true &&
             statuses[Permission.microphone]?.isGranted == true) {
-          debugPrint('✅ Permissions granted, initializing WebRTC...');
-          // Tunggu sebentar sebelum initialize WebRTC
-          await Future.delayed(const Duration(milliseconds: 300));
+          debugPrint('PAGE: ✅ Permissions granted, next initializing WebRTC...');
+          await Future.delayed(const Duration(milliseconds: 600));
           _initializeWebRTC();
         } else {
-          debugPrint('❌ Permissions denied');
+          debugPrint('PAGE: ❌ Permissions denied');
           _showPermissionError();
           return;
         }
       } else {
-        // Permissions already granted, langsung initialize WebRTC
-        debugPrint('✅ Permissions already granted, initializing WebRTC...');
+        debugPrint('PAGE: ✅ Permissions already granted, next initializing WebRTC...');
         _initializeWebRTC();
       }
 
@@ -94,8 +95,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       });
 
     } catch (e) {
-      debugPrint('❌ Initialization error: $e');
-      _showError('Initialization failed: $e');
+      debugPrint('PAGE: ❌ _initializeWithPermissions error: $e');
+      _showError('_initializeWithPermissions failed: $e');
     }
   }
 
@@ -106,45 +107,50 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
       _localRendererAlt = RTCVideoRenderer();
       await _localRendererAlt!.initialize();
-
-      debugPrint('✅ Local renderer initialized');
+      debugPrint('PAGE: ✅ Local renderer initialized');
     } catch (e) {
-      debugPrint('❌ Error initializing local renderer: $e');
+      debugPrint('PAGE: ❌ Error _initializeLocalRenderer local renderer: $e');
+      _showError(e.toString());
     }
   }
 
   void _initializeWebRTC() {
-    debugPrint('🔧 Setting up WebRTC callbacks');
+    debugPrint('PAGE: 🔧 _initializeWebRTC setting up WebRTC callbacks');
+
+    debugPrint('PAGE: 🌐 Connecting to signaling server...');
+    _webRTCManager.connect(
+      "https://signaling-websocket.payuung.com",
+      widget.roomId,
+    );
 
     _webRTCManager.onConnected = () {
-      debugPrint('✅ Connected to room');
+      debugPrint('PAGE: ✅ Connected to room');
       setState(() {
         _isConnected = true;
       });
     };
 
     _webRTCManager.onLocalStream = (stream) {
-      debugPrint('📹 LOCAL STREAM UPDATED - Refreshing UI');
+      debugPrint('PAGE: 📹 LOCAL STREAM UPDATED - Refreshing UI');
 
       setState(() {
         _localStream = stream;
         if (_localRenderer != null) {
           _localRenderer!.srcObject = stream;
-          debugPrint('✅ Local renderer updated with new stream');
+          debugPrint('PAGE: ✅ Local renderer updated with new stream');
         }
       });
 
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) {
           setState(() {});
-          debugPrint('✅ Extra UI refresh completed');
+          debugPrint('PAGE: ✅ Extra UI refresh completed');
         }
       });
     };
 
     _webRTCManager.onRemoteStream = (peerId, stream) async {
-      debugPrint('📹 Remote stream ready for: $peerId');
-
+      debugPrint('PAGE: 📹 Remote stream ready for: $peerId');
       try {
         final renderer = RTCVideoRenderer();
         await renderer.initialize();
@@ -154,17 +160,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           setState(() {
             _remoteRenderers[peerId] = renderer;
           });
-          debugPrint('✅ Remote renderer created for: $peerId');
+          debugPrint('PAGE: ✅ Remote renderer created for: $peerId');
         } else {
           renderer.dispose();
         }
       } catch (e) {
-        debugPrint('❌ Error creating remote renderer: $e');
+        debugPrint('PAGE: ❌ Error creating remote renderer: $e');
       }
     };
 
     _webRTCManager.onPeerDisconnected = (peerId) {
-      debugPrint('🔴 Peer disconnected: $peerId');
+      debugPrint('PAGE: 🔴 Peer disconnected: $peerId');
       setState(() {
         final renderer = _remoteRenderers[peerId];
         if (renderer != null) {
@@ -175,7 +181,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     };
 
     _webRTCManager.onError = (error) {
-      debugPrint('❌ WebRTC Error: $error');
+      debugPrint('PAGE: ❌ WebRTC Error: $error');
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_isDisposed) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -188,93 +194,65 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       });
     };
 
-    // Connect ke room
-    debugPrint('🌐 Connecting to signaling server...');
-    _webRTCManager.connect(
-      "https://signaling-websocket.payuung.com",
-      widget.roomId,
-    );
   }
 
-  void _showPermissionError() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: const Text('Permission Required'),
-          content: const Text('Camera and microphone access is required for video call.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      ).then((_) {
-        Navigator.pop(context); // Kembali ke previous screen
-      });
+  void _clickShowControls() {
+    setState(() {
+      _showControls = !_showControls;
     });
   }
 
-  void _showError(String message) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    });
+  Future<void> _muteMic() async {
+    await _webRTCManager.toggleMute();
+    if (mounted) {
+      if(_webRTCManager.isProcessing == false){
+        setState(() {});
+      }
+    }
+  }
+
+  void _disableCamera() {
+    _webRTCManager.toggleCamera();
+  }
+
+  Future<void> _switchCamera() async {
+    debugPrint('PAGE: 🔄 SWITCH CAMERA - Before:');
+    debugPrint('PAGE: - Local stream: ${_webRTCManager.localStream != null}');
+    debugPrint('PAGE: - Local renderer srcObject: ${_localRenderer?.srcObject != null}');
+
+    await _webRTCManager.toggleSwitchCamera();
+
+    debugPrint('PAGE: ✅ Switch camera completed - waiting for UI update');
+  }
+
+  void _endCall() {
+    debugPrint('PAGE: 📞 Ending call......................');
+    _webRTCManager.disconnect();
+    Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_permissionsChecked) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 20),
-              Text(
-                'Checking permissions...',
-                style: TextStyle(color: Colors.white),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
-      backgroundColor: Colors.black,
       body: GestureDetector(
         onTap: () {
-          // **TOGGLE CONTROLS VISIBILITY KETIKA TAP DI SEMBARANG TEMPAT**
-          _toggleControls(); // atau _toggleControlsWithAutoHide()
+          _clickShowControls();
         },
-        behavior: HitTestBehavior.opaque, // **DETECT TAP DI SEMUA AREA**
+        behavior: HitTestBehavior.opaque,
         child: Stack(
           children: [
-            // Remote videos (full screen background)
             _buildRemoteVideos(),
-        
-            // **PERBAIKAN: Draggable Local Video**
+
             if (_localRenderer != null && _localStream != null)
               _buildDraggableLocalVideo(),
-        
-            // Connection status
+
             if (!_isConnected)
               Positioned(
                 top: MediaQuery.of(context).padding.top + 20,
                 left: 0,
                 right: 0,
                 child: Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
                   color: Colors.orange.withOpacity(0.8),
                   child: Text(
                     'Connecting to room ${widget.roomId}...',
@@ -283,11 +261,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   ),
                 ),
               ),
-        
-            // Room info
+
             if (_isConnected)
               Positioned(
-                top: MediaQuery.of(context).padding.top + 20,
+                top: MediaQuery.of(context).padding.top + 30,
                 left: 20,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -317,62 +294,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 ),
               ),
 
-            // **PERBAIKAN: Controls dengan conditional visibility**
-            if (_showControls) _buildControls(),
+            _buildControls(),
           ],
         ),
       ),
     );
   }
 
-/*  Widget _buildRemoteVideos() {
-    if (_remoteRenderers.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.videocam_off, size: 64, color: Colors.white54),
-            const SizedBox(height: 16),
-            const Text(
-              'Waiting for other participants...',
-              style: TextStyle(color: Colors.white54, fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            if (_isConnected)
-              Text(
-                'Share this room ID: ${widget.roomId}',
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
-              ),
-          ],
-        ),
-      );
-    }
-
-    // Jika hanya 1 remote video, tampilkan full screen
-    if (_remoteRenderers.length == 1) {
-      final renderer = _remoteRenderers.values.first;
-      return RTCVideoView(
-        renderer,
-        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-      );
-    }
-
-    // Jika multiple remote videos, tampilkan dalam grid
-    return GridView.count(
-      crossAxisCount: 2,
-      children: _remoteRenderers.entries.map((entry) {
-        return Container(
-          margin: const EdgeInsets.all(4),
-          child: RTCVideoView(
-            entry.value,
-            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-          ),
-        );
-      }).toList(),
-    );
-  }*/
   Widget _buildRemoteVideos() {
     final remoteCount = _remoteRenderers.length;
+    debugPrint('PAGE: ====== TOTAL VIDEO REMOTE TO SHOW $remoteCount ==========');
 
     if (remoteCount == 0) {
       return _buildWaitingScreen();
@@ -442,25 +373,26 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.videocam_off, size: 64, color: Colors.white54),
+          const Icon(Icons.videocam_off, size: 64, color: Colors.black54),
           const SizedBox(height: 16),
           const Text(
             'Waiting for other participants...',
-            style: TextStyle(color: Colors.white54, fontSize: 16),
+            style: TextStyle(color: Colors.black54, fontSize: 16),
           ),
           const SizedBox(height: 8),
           if (_isConnected)
             Text(
               'Share this room ID: ${widget.roomId}',
-              style: const TextStyle(color: Colors.white38, fontSize: 12),
+              style: const TextStyle(color: Colors.black54, fontSize: 12),
             ),
         ],
       ),
     );
   }
 
-  // **PERBAIKAN: Draggable Local Video Widget**
   Widget _buildDraggableLocalVideo() {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
     return Positioned(
       left: _localVideoPosition.dx,
       top: _localVideoPosition.dy,
@@ -473,14 +405,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         onPanUpdate: (details) {
           setState(() {
             _localVideoPosition += details.delta;
-
-            // Batasi agar tidak keluar dari screen
-            final screenWidth = MediaQuery.of(context).size.width;
-            final screenHeight = MediaQuery.of(context).size.height;
-
             _localVideoPosition = Offset(
-              _localVideoPosition.dx.clamp(0.0, screenWidth - 120),
-              _localVideoPosition.dy.clamp(0.0, screenHeight - 160),
+              _localVideoPosition.dx.clamp(0.0, screenWidth - wLocalVideo),
+              _localVideoPosition.dy.clamp(0.0, (screenHeight - hLocalVideo)),
             );
           });
         },
@@ -489,18 +416,31 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             _isDragging = false;
           });
         },
+        onTap: (){
+          setState(() {
+            if (isDefaultSizeLocalVideo) {
+              wLocalVideo = screenWidth/1.6;
+              hLocalVideo = screenHeight/2.2;
+              isDefaultSizeLocalVideo = false;
+            } else {
+              wLocalVideo = 150;
+              hLocalVideo = 220;
+              isDefaultSizeLocalVideo = true;
+            }
+          });
+        },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          width: 120,
-          height: 160,
+          width: wLocalVideo,
+          height: hLocalVideo,
           decoration: BoxDecoration(
             border: Border.all(
               color: _isDragging ? Colors.blue : Colors.white,
               width: _isDragging ? 3 : 2,
             ),
             borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              const BoxShadow(
+            boxShadow: const [
+              BoxShadow(
                 color: Colors.black54,
                 blurRadius: 8,
                 offset: Offset(0, 4),
@@ -516,66 +456,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  // fixed, dont delete
-  /*Widget _buildLocalVideoContent() {
-    // **PERBAIKAN: Cek apakah camera aktif berdasarkan track enabled state**
-    bool isCameraActive = false;
-
-    if (_localStream != null) {
-      final videoTracks = _localStream!.getVideoTracks();
-      if (videoTracks.isNotEmpty) {
-        // Camera aktif jika ada video track DAN track enabled
-        isCameraActive = videoTracks.any((track) => track.enabled);
-      }
-    }
-
-    if (!isCameraActive) {
-      // **TAMPILAN KETIKA CAMERA MATI: Black screen dengan icon**
-      return Container(
-        color: Colors.black,
-        child: const Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.videocam_off,
-              size: 32,
-              color: Colors.white54,
-            ),
-            SizedBox(height: 8),
-            Text(
-              'Camera Off',
-              style: TextStyle(
-                color: Colors.white54,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // **TAMPILAN KETIKA CAMERA AKTIF: Video normal**
-    return RTCVideoView(
-      _localRenderer!,
-      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-      mirror: true,
-    );
-  }*/
   Widget _buildLocalVideoContent() {
-    // **PERBAIKAN: Handle case ketika renderer sedang di-recreate**
     if (_localRenderer == null) {
       return _buildCameraOffPlaceholder();
     }
-
     final isCameraActive = _webRTCManager.isCameraOn &&
         _webRTCManager.localStream != null &&
         _webRTCManager.localStream!.getVideoTracks().isNotEmpty;
-
     if (!isCameraActive) {
       return _buildCameraOffPlaceholder();
     }
-
-    // **PERBAIKAN: Pastikan renderer memiliki stream yang benar**
     if (_localRenderer!.srcObject != _webRTCManager.localStream) {
       _localRenderer!.srcObject = _webRTCManager.localStream;
     }
@@ -601,15 +491,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-
   Widget _buildControls() {
-    return Positioned(
-      bottom: 20,
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeInOut,
+      bottom: _showControls ? 20 : -150, // geser ke bawah halus
       left: 0,
       right: 0,
       child: SafeArea(
         child: IgnorePointer(
-          ignoring: false, // Tetap menerima input
+          ignoring: !_showControls, // jangan bisa di-tap kalau sembunyi
           child: GestureDetector(
             onTap: () {},
             behavior: HitTestBehavior.opaque,
@@ -634,7 +525,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                             icon: Icons.play_arrow,
                             label: 'Create Offer',
                             onPressed: () {
-                              _webRTCManager.createOfferManually();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('Manual offer created')),
                               );
@@ -644,7 +534,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                             icon: Icons.refresh,
                             label: 'Reconnect',
                             onPressed: () {
-                              _webRTCManager.reconnect();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('Reconnecting...')),
                               );
@@ -654,7 +543,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                             icon: Icons.replay,
                             label: 'Retry Conn',
                             onPressed: () {
-                              _webRTCManager.retryConnections();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('Retrying connections...')),
                               );
@@ -664,7 +552,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                             icon: Icons.info,
                             label: 'Status',
                             onPressed: () {
-                              _webRTCManager.checkConnectionStatus();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('Check console for status')),
                               );
@@ -673,13 +560,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         ],
                       ),
                     ),
-          
+
                   // Main controls
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(25),
+                      color: Colors.black54.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(50),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -688,36 +575,21 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                           icon: _webRTCManager.isMuted ? Icons.mic_off : Icons.mic,
                           backgroundColor: _webRTCManager.isMuted ? Colors.red : Colors.white,
                           iconColor: _webRTCManager.isMuted ? Colors.white : Colors.black,
-                          onPressed: () async {
-                            await _webRTCManager.toggleMute();
-                            if (mounted) {
-                              setState(() {}); // **PERBAIKAN: Refresh UI setelah toggle**
-                            }
-                          },
+                          onPressed: _muteMic,
                           tooltip: _webRTCManager.isMuted ? 'Unmute' : 'Mute',
                         ),
                         _buildControlButton(
                           icon: _webRTCManager.isCameraOn ? Icons.videocam : Icons.videocam_off,
                           backgroundColor: _webRTCManager.isCameraOn ? Colors.white : Colors.red,
                           iconColor: _webRTCManager.isCameraOn ? Colors.black : Colors.white,
-                          onPressed: _webRTCManager.toggleCamera,
+                          onPressed: _disableCamera,
                           tooltip: _webRTCManager.isCameraOn ? 'Turn off camera' : 'Turn on camera',
                         ),
                         _buildControlButton(
                           icon: Icons.switch_camera,
                           backgroundColor: Colors.white,
                           iconColor: Colors.black,
-                          onPressed: () async {
-                            debugPrint('🔄 SWITCH CAMERA - Before:');
-                            debugPrint('   - Local stream: ${_webRTCManager.localStream != null}');
-                            debugPrint('   - Local renderer srcObject: ${_localRenderer?.srcObject != null}');
-          
-                            // **SIMPLE: Panggil switchCamera dan biarkan WebRTCManager handle sisanya**
-                            await _webRTCManager.switchCamera();
-          
-                            // **UI AKAN OTOMATIS UPDATE via onLocalStream callback**
-                            debugPrint('✅ Switch camera completed - waiting for UI update');
-                          },
+                          onPressed: _switchCamera,
                           tooltip: 'Switch camera',
                         ),
                         _buildControlButton(
@@ -781,30 +653,37 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     );
   }
 
-  void _endCall() {
-    debugPrint('📞 Ending call...');
-    _webRTCManager.disconnect();
-    Navigator.pop(context);
+  void _showPermissionError() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Permission Required'),
+          content: const Text('Camera and microphone access is required for video call.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      ).then((_) {
+        Navigator.pop(context); // Kembali ke previous screen
+      });
+    });
   }
 
-  @override
-  void dispose() {
-    debugPrint('🧹 Disposing VideoCallScreen...');
-    _isDisposed = true;
-
-    // Dispose semua renderers
-    _localRenderer?.dispose();
-    _localRendererAlt?.dispose(); // **DISPOSE ALTERNATE RENDERER**
-
-    for (final renderer in _remoteRenderers.values) {
-      renderer.dispose();
-    }
-    _remoteRenderers.clear();
-
-    _webRTCManager.dispose();
-
-    super.dispose();
-    debugPrint('✅ VideoCallScreen disposed');
+  void _showError(String message) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    });
   }
+  
 }
-
