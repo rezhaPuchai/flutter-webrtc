@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:test_web_rtc/learn-rtc/form_room_page.dart';
 import 'package:test_web_rtc/second/home_page.dart';
 
 void main() {
@@ -54,9 +55,9 @@ class MenuPage extends StatelessWidget {
               width: double.infinity,
               child: FilledButton.icon(
                 onPressed: () async {
-                  // Navigator.of(context).push(MaterialPageRoute(
-                  //   builder: (_) => const FormRoomPage(),
-                  // ));
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const FormRoomPage(),
+                  ));
                 },
                 icon: const Icon(Icons.smartphone),
                 label: const Text('Learn RTC'),
