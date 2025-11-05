@@ -180,7 +180,7 @@ class _RoomPageState extends State<RoomPage> {
       });
     };
 
-    _webRTCManager.onError = (error) {
+    /*_webRTCManager.onError = (error) {
       debugPrint('PAGE: ❌ WebRTC Error: $error');
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_isDisposed) {
@@ -192,6 +192,30 @@ class _RoomPageState extends State<RoomPage> {
           );
         }
       });
+    };*/
+    _webRTCManager.onError = (error) {
+      debugPrint('PAGE: ❌ WebRTC Error: $error');
+
+      // Handle native crash specifically
+      if (error.contains('SIGABRT') || error.contains('DecodingQueue')) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_isDisposed) {
+            _showNativeCrashDialog();
+          }
+        });
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_isDisposed) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(error),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 5),
+              ),
+            );
+          }
+        });
+      }
     };
 
   }
@@ -301,7 +325,9 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
-  Widget _buildRemoteVideos() {
+  final Map<String, bool> _muted = {};
+
+  /*Widget _buildRemoteVideos() {
     final remoteCount = _remoteRenderers.length;
     debugPrint('PAGE: ====== TOTAL VIDEO REMOTE TO SHOW $remoteCount ==========');
 
@@ -314,32 +340,71 @@ class _RoomPageState extends State<RoomPage> {
         final availableHeight = constraints.maxHeight;
         final availableWidth = constraints.maxWidth;
 
-        // **CASE 1: Single participant - Fullscreen**
         if (remoteCount == 1) {
-          return RTCVideoView(
-            _remoteRenderers.values.first,
-            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+          return Stack(
+            children: [
+              RTCVideoView(
+                _remoteRenderers.values.first,
+                mirror: true,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              ),
+              Positioned.fill(
+                child: Align(
+                  alignment: Alignment.center,
+                  child: Text(
+                    _remoteRenderers.keys.elementAt(0),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      shadows: [
+                        Shadow(offset: Offset(1, 1), blurRadius: 2, color: Colors.black),
+                      ],
+                    ),
+                    maxLines: 3,
+                  ),
+                ),
+              ),
+            ],
           );
         }
 
-        // **CASE 2: Two participants - Vertical split**
         if (remoteCount == 2) {
           return Column(
             children: _remoteRenderers.entries.map((entry) {
               return Expanded(
                 child: SizedBox(
                   width: availableWidth,
-                  child: RTCVideoView(
-                    entry.value,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  ),
+                  child: Stack(
+                    children: [
+                      RTCVideoView(
+                        entry.value,
+                        mirror: true,
+                        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
+                      Positioned.fill(
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: Text(
+                            entry.key,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              shadows: [
+                                Shadow(offset: Offset(1, 1), blurRadius: 2, color: Colors.black),
+                              ],
+                            ),
+                            maxLines: 3,
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
                 ),
               );
             }).toList(),
           );
         }
 
-        // **CASE 3: Three or more participants - Grid 2 columns**
         final itemHeight = availableHeight / 2.3;
         final itemWidth = availableWidth / 2;
 
@@ -355,18 +420,307 @@ class _RoomPageState extends State<RoomPage> {
             final peerId = _remoteRenderers.keys.elementAt(index);
             final renderer = _remoteRenderers[peerId]!;
 
-            return Container(
-              margin: const EdgeInsets.all(1),
-              child: RTCVideoView(
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: RTCVideoView(
+                    renderer,
+                    mirror: true,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
+                ),
+                Positioned(
+                  bottom: 8,
+                  left: 8,
+                  child: Text(
+                    peerId,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      shadows: [
+                        Shadow(offset: Offset(1, 1), blurRadius: 2, color: Colors.black),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+
+          },
+        );
+      },
+    );
+  }*/
+
+  Widget _buildRemoteVideos() {
+    final remoteCount = _remoteRenderers.length;
+    debugPrint('PAGE: ====== TOTAL VIDEO REMOTE TO SHOW $remoteCount ==========');
+
+    if (remoteCount == 0) {
+      return _buildWaitingScreen();
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableHeight = constraints.maxHeight;
+        final availableWidth = constraints.maxWidth;
+
+        // helper single tile builder
+        Widget buildTile(String peerId, RTCVideoRenderer renderer, double w, double h) {
+          final texId = renderer.textureId;
+          final hasTexture = texId != null && renderer.srcObject != null;
+
+          final videoWidget = hasTexture
+              ? Texture(textureId: texId)
+              : RTCVideoView(
+            renderer,
+            mirror: true,
+            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+          );
+
+          final muteIcon = _muted[peerId] == true ? Icons.volume_off : Icons.volume_up;
+
+          if (hasTexture) {
+            // overlay button visible (texture rendered inside Flutter)
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                Positioned.fill(child: videoWidget),
+                Positioned(
+                  left: 8,
+                  bottom: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(6)),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          peerId,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        InkWell(
+                          onTap: () => _toggleMute(peerId),
+                          borderRadius: BorderRadius.circular(24),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                            child: Icon(muteIcon, color: Colors.white, size: 18),
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+                ),
+                // Positioned(
+                //   right: 8,
+                //   bottom: 8,
+                //   child: InkWell(
+                //     onTap: () => _toggleMute(peerId),
+                //     borderRadius: BorderRadius.circular(24),
+                //     child: Container(
+                //       padding: const EdgeInsets.all(6),
+                //       decoration: BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                //       child: Icon(muteIcon, color: Colors.white, size: 18),
+                //     ),
+                //   ),
+                // ),
+              ],
+            );
+          } else {
+            // fallback: PlatformView likely on top -> show control bar under video
+            return Column(
+              children: [
+                SizedBox(width: w, height: h, child: videoWidget),
+                Container(
+                  width: w,
+                  color: Colors.black54,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(peerId,
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      IconButton(
+                        onPressed: () => _toggleMute(peerId),
+                        icon: Icon(muteIcon),
+                        color: Colors.white,
+                        splashRadius: 20,
+                        iconSize: 22,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }
+        }
+
+        if (remoteCount == 1) {
+          final peerId = _remoteRenderers.keys.elementAt(0);
+          final renderer = _remoteRenderers[peerId]!;
+          return Stack(
+            children: [
+              RTCVideoView(
                 renderer,
+                mirror: true,
                 objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
               ),
-            );
+              Positioned.fill(
+                child: Align(
+                  alignment: Alignment.center,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        peerId,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      InkWell(
+                        onTap: () => _toggleMute(peerId),
+                        borderRadius: BorderRadius.circular(24),
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                          child: Icon(_muted[peerId] == true ? Icons.volume_off : Icons.volume_up,
+                              color: Colors.white, size: 22),
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+              ),
+              // Positioned(
+              //   right: 8,
+              //   bottom: 8,
+              //   child: InkWell(
+              //     onTap: () => _toggleMute(peerId),
+              //     borderRadius: BorderRadius.circular(24),
+              //     child: Container(
+              //       padding: const EdgeInsets.all(8),
+              //       decoration: BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+              //       child: Icon(_muted[peerId] == true ? Icons.volume_off : Icons.volume_up, color: Colors.white),
+              //     ),
+              //   ),
+              // ),
+            ],
+          );
+        }
+
+        if (remoteCount == 2) {
+          return Column(
+            children: _remoteRenderers.entries.map((entry) {
+              return Expanded(
+                child: SizedBox(
+                  width: availableWidth,
+                  child: Stack(
+                    children: [
+                      RTCVideoView(
+                        entry.value,
+                        mirror: true,
+                        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                      ),
+                      Positioned.fill(
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                entry.key,
+                                style: const TextStyle(color: Colors.white, fontSize: 12),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              InkWell(
+                                onTap: () => _toggleMute(entry.key),
+                                borderRadius: BorderRadius.circular(24),
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                                  child: Icon(_muted[entry.key] == true
+                                      ? Icons.volume_off : Icons.volume_up,
+                                      color: Colors.white, size: 22,),
+                                ),
+                              ),
+                            ],
+                          )
+                        ),
+                      ),
+                      // Positioned(
+                      //   right: 8,
+                      //   bottom: 8,
+                      //   child: InkWell(
+                      //     onTap: () => _toggleMute(entry.key),
+                      //     borderRadius: BorderRadius.circular(24),
+                      //     child: Container(
+                      //       padding: const EdgeInsets.all(8),
+                      //       decoration: BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+                      //       child: Icon(_muted[entry.key] == true ? Icons.volume_off : Icons.volume_up,
+                      //           color: Colors.white),
+                      //     ),
+                      //   ),
+                      // ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          );
+        }
+
+        final itemHeight = availableHeight / 2.3;
+        final itemWidth = availableWidth / 2;
+
+        return GridView.builder(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            childAspectRatio: itemWidth / itemHeight,
+            mainAxisSpacing: 2,
+            crossAxisSpacing: 2,
+          ),
+          itemCount: remoteCount,
+          itemBuilder: (context, index) {
+            final peerId = _remoteRenderers.keys.elementAt(index);
+            final renderer = _remoteRenderers[peerId]!;
+            return buildTile(peerId, renderer, itemWidth, itemHeight);
           },
         );
       },
     );
   }
+
+  Future<void> _toggleMute(String peerId) async {
+    final renderer = _remoteRenderers[peerId];
+    if (renderer == null) return;
+
+    final stream = renderer.srcObject;
+    final newMuted = !(_muted[peerId] ?? false);
+
+    // jika tidak ada stream, hanya update status lokal
+    if (stream == null) {
+      setState(() => _muted[peerId] = newMuted);
+      return;
+    }
+
+    try {
+      for (var track in stream.getAudioTracks()) {
+        track.enabled = !newMuted; // disable when muted
+      }
+    } catch (e) {
+      debugPrint('toggleMute error for $peerId: $e');
+    }
+
+    setState(() => _muted[peerId] = newMuted);
+  }
+
 
   Widget _buildWaitingScreen() {
     return Center(
@@ -476,6 +830,7 @@ class _RoomPageState extends State<RoomPage> {
       mirror: _webRTCManager.currentCamera == 'user',
     );
   }
+
 
   Widget _buildCameraOffPlaceholder() {
     return Container(
@@ -611,6 +966,7 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
+
   Widget _buildDebugButton({
     required IconData icon,
     required String label,
@@ -684,6 +1040,25 @@ class _RoomPageState extends State<RoomPage> {
         ),
       );
     });
+  }
+
+  void _showNativeCrashDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Compatibility Issue'),
+        content: const Text(
+          'Detected video compatibility issues. Switching to compatibility mode for better stability.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
   
 }

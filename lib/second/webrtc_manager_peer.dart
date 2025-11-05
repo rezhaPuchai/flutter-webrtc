@@ -109,6 +109,11 @@ class WebRTCManagerPeer {
       _handleUserLeft(data);
     });
 
+    socket.on('peer-left', (data) {
+      debugPrint('🔴 USER LEFT: $data');
+      _handleUserLeft(data);
+    });
+
     // Debug events
     socket.onAny((event, data) {
       debugPrint('📡 [ALL EVENTS] $event: $data');
@@ -176,10 +181,10 @@ class WebRTCManagerPeer {
   }
 
   // Handle user left event
-  void _handleUserLeft(dynamic data) {
+  void _handleUserLeft(dynamic peerId) {
     if (_isDisposed) return;
 
-    final peerId = data['userId'];
+    // final peerId = data['userId'];
     debugPrint('🔴 Cleaning up peer: $peerId');
 
     _cleanupPeer(peerId);

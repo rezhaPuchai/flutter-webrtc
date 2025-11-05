@@ -65,6 +65,7 @@ class RtcManager {
       }
     };
   }
+
   static Map<String, dynamic> get mediaConstraints {
     return {
       'audio': {
@@ -88,7 +89,7 @@ class RtcManager {
       }
     };
   }
-  // TAMBAHKAN: Software fallback configuration
+
   static Map<String, dynamic> get softwareFallbackConfig {
     return {
       'iceServers': [
@@ -100,6 +101,65 @@ class RtcManager {
       'forceSoftwareCodecs': true,
       'offerToReceiveAudio': true,
       'offerToReceiveVideo': true,
+    };
+  }
+
+
+  bool _nativeCrashDetected = false;
+  int _nativeCrashCount = 0;
+
+  // FORCE SOFTWARE DECODING CONFIG
+  static Map<String, dynamic> get forcedSoftwareConfig {
+    return {
+      'iceServers': [
+        {'urls': 'stun:stun.l.google.com:19302'},
+      ],
+      'sdpSemantics': 'unified-plan',
+
+      // CRITICAL: Force software codecs dan disable hardware acceleration
+      'forceSoftwareCodecs': true,
+      'preferSoftwareCodecs': true,
+
+      // Disable hardware video encoding/decoding
+      'disableHardwareAcceleration': true,
+
+      // Video codec preferences - prioritise software-friendly codecs
+      'codecPreferences': {
+        'video': [
+          'VP8', // Paling compatible untuk software decoding
+          'VP9',
+          'H264' // H264 baseline profile untuk software fallback
+        ]
+      },
+
+      // Additional constraints untuk stability
+      'bundlePolicy': 'max-bundle',
+      'rtcpMuxPolicy': 'require',
+      'iceCandidatePoolSize': 0, // Reduce memory usage
+    };
+  }
+
+  // Update media constraints untuk reduce load
+  static Map<String, dynamic> get lowProfileMediaConstraints {
+    return {
+      'audio': {
+        'echoCancellation': true,
+        'noiseSuppression': true,
+        'autoGainControl': true,
+        'channelCount': 1, // Mono untuk reduce bandwidth
+      },
+      'video': {
+        'width': {'ideal': 480, 'max': 640},  // Turunkan resolusi
+        'height': {'ideal': 360, 'max': 480},
+        'frameRate': {'ideal': 20, 'max': 30}, // Turunkan frame rate
+        'facingMode': 'user',
+
+        // Advanced constraints untuk stability
+        'deviceId': 'default',
+
+        // CRITICAL: Reduce bandwidth dan processing
+        'bitrate': 300000, // Limit bitrate
+      }
     };
   }
 
@@ -125,7 +185,7 @@ class RtcManager {
     }
   }
 
-  Future<void> _getUserMedia() async {
+  /*Future<void> _getUserMedia() async {
     if (_isDisposed) return;
 
     final mediaConstraints = {
@@ -154,6 +214,63 @@ class RtcManager {
       debugPrint('❌ Error getting user media: $e');
       _safeCallback(() => onError?.call('Failed to access camera/microphone: $e'));
       rethrow;
+    }
+  }*/
+  Future<void> _getUserMedia() async {
+    if (_isDisposed) return;
+
+    // Gunakan low profile constraints,
+    // berjalan baik utk android dan ios untuk handle video codec,
+    // jangan dihapus
+    // final mediaConstraints = _nativeCrashDetected
+    //     ? lowProfileMediaConstraints
+    //     : mediaConstraints;
+
+    final mediaConstraints = {
+      'audio': {
+        'echoCancellation': true,
+        'noiseSuppression': true,
+      },
+      'video': {
+        'width': {'ideal': 640},
+        'height': {'ideal': 480},
+        'frameRate': {'ideal': 30},
+        'facingMode': _currentCamera,
+      }
+    };
+
+    try {
+      _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      debugPrint('✅ Got local media stream with ${_localStream!.getTracks().length} tracks');
+
+      // **VALIDATE LOCAL TRACKS**
+      _localStream!.getTracks().forEach((track) {
+        if (!_isValidMediaTrack(track)) {
+          debugPrint('⚠️ Invalid local track detected: ${track.kind} ${track.id}');
+          track.stop();
+        }
+      });
+
+      _safeCallback(() => onLocalStream?.call(_localStream!));
+    } catch (e) {
+      debugPrint('❌ Error getting user media: $e');
+
+      // Fallback ke audio-only jika video bermasalah
+      if (!_nativeCrashDetected) {
+        debugPrint('🔄 Trying audio-only fallback...');
+        try {
+          _localStream = await navigator.mediaDevices.getUserMedia({
+            'audio': mediaConstraints['audio'],
+            'video': false
+          });
+          _safeCallback(() => onLocalStream?.call(_localStream!));
+        } catch (e2) {
+          debugPrint('❌ Audio-only fallback also failed: $e2');
+          _safeCallback(() => onError?.call('Failed to access microphone: $e2'));
+        }
+      } else {
+        _safeCallback(() => onError?.call('Failed to access camera/microphone: $e'));
+      }
     }
   }
 
@@ -220,6 +337,11 @@ class RtcManager {
       // _handleUserLeft(data);
     });
 
+    socket.on('peer-left', (data) {
+      debugPrint('🔴 USER LEFT: $data');
+      _handleUserLeft(data);
+    });
+
     socket.onAny((event, data) {
       debugPrint('📡 [ALL EVENTS - onAny] $event: $data');
     });
@@ -247,20 +369,11 @@ class RtcManager {
     try {
       debugPrint('🔗 Creating peer connection for: $peerId');
 
-      // backup
-      // final configuration = {
-      //   'iceServers': [
-      //     {'urls': 'stun:stun.l.google.com:19302'},
-      //     {'urls': 'stun:stun1.l.google.com:19302'},
-      //   ]
-      // };
-
-      final configuration = _eglErrorOccurred
-          ? softwareFallbackConfig
-          : androidConfig;
+      final configuration = _nativeCrashDetected
+          ? forcedSoftwareConfig
+          : (_eglErrorOccurred ? softwareFallbackConfig : androidConfig);
 
       final pc = await createPeerConnection(configuration);
-
       _peerConnections[peerId] = pc;
 
       pc.onIceCandidate = (RTCIceCandidate candidate) {
@@ -287,13 +400,34 @@ class RtcManager {
         _addRemoteStream(peerId, stream);
       };
 
+      pc.onRemoveStream = (MediaStream stream) {
+        if (_isDisposed) return;
+        debugPrint('🎬 Remote stream onRemoveStream from $peerId: ${stream.id}');
+        // _addRemoteStream(peerId, stream);
+      };
+
       pc.onTrack = (RTCTrackEvent event) {
         if (_isDisposed) return;
-        debugPrint('🎬 Remote track added from $peerId: ${event.track.kind}');
-        if (event.streams.isNotEmpty) {
-          final stream = event.streams.first;
-          _addRemoteStream(peerId, stream);
-        }
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (_isDisposed || !_peerConnections.containsKey(peerId)) return;
+
+          try {
+            if (event.streams.isNotEmpty) {
+              final stream = event.streams.first;
+              debugPrint('🎬 Remote track added: ${event.track.kind} from $peerId');
+
+              // **VALIDATE TRACK SEBELUM DIPROSES**
+              if (_isValidMediaTrack(event.track)) {
+                _addRemoteStream(peerId, stream);
+              } else {
+                debugPrint('⚠️ Skipping invalid media track from $peerId');
+              }
+            }
+          } catch (e) {
+            debugPrint('❌ Error in onTrack handler: $e');
+            _handleNativeError(e.toString(), peerId);
+          }
+        });
       };
 
       pc.onConnectionState = (RTCPeerConnectionState state) {
@@ -316,13 +450,13 @@ class RtcManager {
       print('Stack: $stack');
 
       // TAMBAHKAN: Try software fallback pada error
-      if (!_eglErrorOccurred && e.toString().contains('EGL') || e.toString().contains('OpenGL')) {
-        print('🔄 [SIMULATOR] EGL error detected, switching to software fallback');
-        _eglErrorOccurred = true;
-        _eglErrorCount++;
+      // **DETECT NATIVE CRASH PATTERNS**
+      if (_isNativeCrashError(e.toString())) {
+        _nativeCrashDetected = true;
+        _nativeCrashCount++;
 
-        // Retry dengan software configuration
-        if (_eglErrorCount <= 3) {
+        if (_nativeCrashCount <= 2) {
+          debugPrint('🔄 Native crash detected, retrying with software config...');
           await Future.delayed(const Duration(seconds: 1));
           return _createPeerConnection(peerId);
         }
@@ -358,7 +492,7 @@ class RtcManager {
 
 
 
-  void _handleSignalEvent(dynamic data) async {
+  /*void _handleSignalEvent(dynamic data) async {
     if (_isDisposed) return;
 
     final from = data['from'];
@@ -409,6 +543,63 @@ class RtcManager {
           _handleSignalEvent(data);
         }
       });
+    }
+  }*/
+  void _handleSignalEvent(dynamic data) async {
+    if (_isDisposed) return;
+
+    final from = data['from'];
+    final signalData = data['data'];
+    final type = signalData['type'];
+
+    debugPrint('🎯 Handling signal from $from - type: $type');
+
+    // **CRITICAL: Skip processing jika native crash terdeteksi dan kita dalam recovery**
+    if (_nativeCrashDetected && _nativeCrashCount >= 2) {
+      debugPrint('⚠️ Skipping signal processing due to native crash recovery');
+      return;
+    }
+
+    // Tambahkan delay lebih lama untuk stability
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    try {
+      if (!_peerConnections.containsKey(from)) {
+        debugPrint('🆕 Creating peer connection for signal from: $from');
+        await _createPeerConnectionWithRetry(from);
+        await Future.delayed(const Duration(milliseconds: 800)); // Delay lebih lama
+      }
+
+      final pc = _peerConnections[from];
+      if (pc == null) {
+        debugPrint('❌ Failed to create peer connection for: $from');
+        return;
+      }
+
+      switch (type) {
+        case 'offer':
+          await _handleRemoteOfferWithRetry(pc, from, signalData);
+          break;
+        case 'answer':
+          await _handleRemoteAnswerWithRetry(pc, signalData);
+          break;
+        case 'candidate':
+          await _handleRemoteCandidateWithRetry(pc, signalData);
+          break;
+        default:
+          debugPrint('❌ Unknown signal type: $type');
+      }
+    } catch (e) {
+      debugPrint('❌ Error handling signal: $e');
+
+      // **JANGAN retry jika ini native crash**
+      if (!_isNativeCrashError(e.toString())) {
+        Future.delayed(const Duration(seconds: 2), () {
+          if (!_isDisposed && _peerConnections.containsKey(from)) {
+            _handleSignalEvent(data);
+          }
+        });
+      }
     }
   }
 
@@ -556,6 +747,61 @@ class RtcManager {
       debugPrint('✅ ICE candidate added');
     } catch (e) {
       debugPrint('❌ Error handling ICE candidate: $e');
+    }
+  }
+
+
+  void _handleUserLeft(dynamic peerId) {
+    if (_isDisposed) return;
+
+    // final peerId = data['userId'];
+    debugPrint('🔴 Cleaning up peer: $peerId');
+
+    _cleanupPeer(peerId);
+    _safeCallback(() => onPeerDisconnected?.call(peerId));
+  }
+
+
+  bool _isNativeCrashError(String error) {
+    return error.contains('SIGABRT') ||
+        error.contains('DecodingQueue') ||
+        error.contains('stagefright') ||
+        error.contains('mediacodec') ||
+        error.contains('EGL') ||
+        error.contains('OpenGL');
+  }
+
+  bool _isValidMediaTrack(MediaStreamTrack track) {
+    try {
+      // Basic validation - pastikan track memiliki ID dan kind yang valid
+      return track.id!.isNotEmpty && (track.kind == 'audio' || track.kind == 'video');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  void _handleNativeError(String error, String peerId) {
+    debugPrint('🔄 Handling native error for $peerId: $error');
+
+    // Mark native crash detected
+    if (!_nativeCrashDetected) {
+      _nativeCrashDetected = true;
+    }
+
+    // Cleanup problematic peer connection
+    _cleanupPeer(peerId);
+
+    // Notify UI tentang error
+    _safeCallback(() => onError?.call('Connection issue with participant. Reconnecting...'));
+
+    // Attempt reconnection setelah delay
+    if (!_isDisposed && _nativeCrashCount < 3) {
+      Future.delayed(const Duration(seconds: 2), () {
+        if (!_isDisposed && !_peerConnections.containsKey(peerId)) {
+          debugPrint('🔄 Reconnecting to $peerId after native error...');
+          _createPeerConnection(peerId);
+        }
+      });
     }
   }
 
@@ -713,6 +959,19 @@ class RtcManager {
     try {
       debugPrint('🎥 Creating COMPLETELY NEW local stream...');
 
+      final mediaConstraints = {
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+        },
+        'video': {
+          'width': {'ideal': 640},
+          'height': {'ideal': 480},
+          'frameRate': {'ideal': 30},
+          'facingMode': _currentCamera,
+        }
+      };
+
       // final mediaConstraints = {
       //   'audio': {
       //     'echoCancellation': true,
@@ -725,8 +984,8 @@ class RtcManager {
       //     'facingMode': _currentCamera,
       //   }
       // };
-
-      final mediaConstraints = {
+      /**/
+      /*final mediaConstraints = {
         'audio': {
           'echoCancellation': true,
           'noiseSuppression': true,
@@ -746,7 +1005,7 @@ class RtcManager {
           'deviceId': 'default',
           'groupId': 'default',
         }
-      };
+      };*/
 
       // BUAT STREAM BARU
       final newLocalStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
